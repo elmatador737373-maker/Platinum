@@ -39,7 +39,7 @@ def init_db():
     cur = conn.cursor()
 
     # 1. Creazione Tabelle Base (Usa sempre IF NOT EXISTS)
-    cur.execute("CREATE TABLE IF NOT EXISTS users (user_id TEXT PRIMARY KEY, wallet INTEGER DEFAULT 3500, bank INTEGER DEFAULT 0)")
+    cur.execute("CREATE TABLE IF NOT EXISTS users (user_id TEXT PRIMARY KEY, wallet INTEGER DEFAULT 20000, bank INTEGER DEFAULT 0)")
     cur.execute("CREATE TABLE IF NOT EXISTS items (name TEXT PRIMARY KEY, description TEXT, price INTEGER, role_required TEXT)")
     cur.execute("CREATE TABLE IF NOT EXISTS inventory (user_id TEXT, item_name TEXT, quantity INTEGER, PRIMARY KEY (user_id, item_name))")
     cur.execute("CREATE TABLE IF NOT EXISTS depositi (role_id TEXT PRIMARY KEY, money INTEGER DEFAULT 0)")
@@ -282,7 +282,7 @@ async def me(interaction: discord.Interaction, azione: str):
 @app_commands.describe(quantita="Numero di messaggi da eliminare (max 100)")
 async def clear(interaction: discord.Interaction, quantita: int):
     # ID del ruolo autorizzato
-    ID_RUOLO_AUTORIZZATO = 1414902915679785031
+    ID_RUOLO_AUTORIZZATO = 1482856659284922530
     
     # Controllo se l'utente ha il ruolo richiesto
     role = interaction.guild.get_role(ID_RUOLO_AUTORIZZATO)
