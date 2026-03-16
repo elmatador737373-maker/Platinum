@@ -379,7 +379,47 @@ async def anonimo(interaction: discord.Interaction, messaggio: str, nickname: st
 
 
 # ================= COMANDI ECONOMIA BASE =================
+RUOLO_AUTORIZZATO_ID = 1482856662141370389
+@bot.tree.command(name="rp_online", description="Annuncia l'apertura della sessione RP")
+@app_commands.describe(id_psn="Inserisci il tuo ID PSN per farti aggiungere")
+async def rp_online(interaction: Interaction, id_psn: str):
+    # Verifica ruolo specifico
+    if not any(r.id == RUOLO_AUTORIZZATO_ID for r in interaction.user.roles) and not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("❌ Non hai il ruolo autorizzato per startare l'RP.", ephemeral=True)
+    
+    embed = discord.Embed(
+        title="🟢 SESSIONE ROLEPLAY ONLINE",
+        description="La sessione è ufficialmente **APERTA**! Preparatevi ed entrate in gioco.",
+        color=discord.Color.from_rgb(46, 204, 113),
+        timestamp=datetime.datetime.now()
+    )
+    embed.add_field(name="👤 Host / Startato da", value=interaction.user.mention, inline=True)
+    embed.add_field(name="🎮 ID PSN Host", value=f"`{id_psn}`", inline=True)
+    embed.add_field(name="📢 Come entrare?", value="Per entrare basta fare il modulo ed inviare la richiesta di invito alla crew.", inline=False)
+    embed.set_footer(text="City RP - Buon gioco a tutti!")
+    if interaction.guild.icon:
+        embed.set_thumbnail(url=interaction.guild.icon.url)
+    
+    await interaction.response.send_message(content="@everyone", embed=embed)
 
+@bot.tree.command(name="rp_offline", description="Annuncia la chiusura della sessione RP")
+async def rp_offline(interaction: Interaction):
+    # Verifica ruolo specifico
+    if not any(r.id == RUOLO_AUTORIZZATO_ID for r in interaction.user.roles) and not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("❌ Non hai il ruolo autorizzato per chiudere l'RP.", ephemeral=True)
+    
+    embed = discord.Embed(
+        title="🔴 SESSIONE ROLEPLAY OFFLINE",
+        description="La sessione di Roleplay è stata **CHIUSA**. Grazie a tutti per la partecipazione!",
+        color=discord.Color.from_rgb(231, 76, 60),
+        timestamp=datetime.datetime.now()
+    )
+    embed.add_field(name="👤 Chiuso da", value=interaction.user.mention, inline=True)
+    embed.add_field(name="⏰ Stato", value="🔴 Offline", inline=True)
+    embed.set_footer(text="City RP - Ci vediamo alla prossima sessione!")
+    
+    await interaction.response.send_message(content="@everyone", embed=embed)
+    
 @bot.tree.command(name="portafoglio", description="Visualizza il tuo saldo contanti e in banca")
 async def portafoglio(interaction: discord.Interaction):
     u = get_user_data(interaction.user.id)
