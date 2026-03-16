@@ -15,7 +15,7 @@ import time
 # ================= CONFIGURAZIONE =================
 TOKEN = os.environ.get("TOKEN")
 DATABASE_URL = os.environ.get("DATABASE_URL")
-RUOLO_STAFF_ID = 1322352826667499591
+RUOLO_STAFF_ID = 1482856659284922530
 
 intents = discord.Intents.default()
 intents.members = True
@@ -653,7 +653,7 @@ async def elimina_documento(interaction: discord.Interaction, cittadino: discord
     except Exception as e:
         print(f"ERRORE ELIMINAZIONE DOCUMENTO: {e}")
         await interaction.followup.send("❌ Errore tecnico durante l'eliminazione.", ephemeral=True)
-POLIZIA_ROLE_ID = 1331717194995732580
+POLIZIA_ROLE_ID = 1482856748250435918
 
 # --- FUNZIONE DI CONTROLLO POLIZIA ---
 def is_polizia(interaction: discord.Interaction):
