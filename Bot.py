@@ -741,7 +741,7 @@ async def pagamulta(interaction: discord.Interaction):
 )
 async def arresto(interaction: discord.Interaction, utente: discord.Member, tempo_minuti: int, motivo: str):
     # Controllo se l'utente è un poliziotto
-    if not any(role.id == 1331717194995732580 for role in interaction.user.roles):
+    if not any(role.id == 1482856748250435918 for role in interaction.user.roles):
 
         return await interaction.response.send_message("❌ Non hai i permessi per effettuare un arresto.", ephemeral=True)
 
@@ -1122,7 +1122,7 @@ async def pagafattura(interaction: discord.Interaction):
 
 
 
-ID_RUOLO_CONCESSIONARIO = 1241534201916948551
+ID_RUOLO_CONCESSIONARIO = 1482856794639433830
 
 @bot.tree.command(name="registra_veicolo", description="Registra la vendita e salva i dati nel database motorizzazione")
 @app_commands.checks.has_any_role(ID_RUOLO_CONCESSIONARIO)
