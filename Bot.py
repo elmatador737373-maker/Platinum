@@ -277,6 +277,43 @@ async def me(interaction: discord.Interaction, azione: str):
     
     # Invia il messaggio nel canale in cui è stato usato il comando
     await interaction.response.send_message(embed=embed)
+# ================= COMANDI BANDI =================
+
+@bot.tree.command(name="bando_aperto", description="Annuncia l'apertura dei bandi")
+async def bando_aperto(interaction: Interaction):
+    if not any(r.id == RUOLO_STAFF_ID for r in interaction.user.roles) and not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("❌ Non sei autorizzato.", ephemeral=True)
+    
+    img_url = "https://cdn.discordapp.com/attachments/1483585343176310979/1483857765771378830/1773849369454.png?ex=69bc1dbc&is=69bacc3c&hm=8b8a8caeffb45c276b330eca0c799c4c3565f227cfe63f0277d7f96de3d58052&"
+    
+    embed = discord.Embed(
+        title="📝 BANDI APERTI",
+        description="I bandi per entrare a far parte del nostro staff o delle fazioni sono ora **APERTI**!\nInviate la vostra candidatura nei canali appositi.",
+        color=discord.Color.blue(),
+        timestamp=datetime.datetime.now()
+    )
+    embed.set_image(url=img_url)
+    embed.set_footer(text="Platinum City RP - Reclutamento")
+    
+    await interaction.response.send_message(content="@everyone", embed=embed)
+
+@bot.tree.command(name="bando_chiuso", description="Annuncia la chiusura dei bandi")
+async def bando_chiuso(interaction: Interaction):
+    if not any(r.id == RUOLO_STAFF_ID for r in interaction.user.roles) and not interaction.user.guild_permissions.administrator:
+        return await interaction.response.send_message("❌ Non sei autorizzato.", ephemeral=True)
+    
+    img_url = "https://cdn.discordapp.com/attachments/1483585343176310979/1483857765444227185/17738493694541.png?ex=69bc1dbc&is=69bacc3c&hm=e0adfb4ac0f2a73a3b604412a8e2c620adb9b5a3f083ca46bb08f8bef7812a5d&"
+    
+    embed = discord.Embed(
+        title="🔒 BANDI CHIUSI",
+        description="Le candidature sono ufficialmente **CHIUSE**. Grazie a tutti coloro che hanno partecipato!",
+        color=discord.Color.dark_grey(),
+        timestamp=datetime.datetime.now()
+    )
+    embed.set_image(url=img_url)
+    embed.set_footer(text="Platinum City RP - Reclutamento Terminato")
+    
+    await interaction.response.send_message(content="@everyone", embed=embed)
 
 @bot.tree.command(name="clear", description="Elimina un numero specifico di messaggi da questo canale")
 @app_commands.describe(quantita="Numero di messaggi da eliminare (max 100)")
@@ -285,7 +322,7 @@ async def clear(interaction: discord.Interaction, quantita: int):
     ID_RUOLO_AUTORIZZATO = 1482856659284922530
     
     # Controllo se l'utente ha il ruolo richiesto
-    role = interaction.guild.get_role(ID_RUOLO_AUTORIZZATO)
+    role = interaction.guild.get_role(RUOLO_STAFF_ID)
     if role not in interaction.user.roles:
         return await interaction.response.send_message(
             "❌ Non hai i permessi necessari (Staff) per usare questo comando.", 
