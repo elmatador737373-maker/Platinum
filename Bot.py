@@ -270,7 +270,7 @@ async def finisci_raccolta(interaction: discord.Interaction):
 async def me(interaction: discord.Interaction, azione: str):
     # Creazione dell'Embed con i parametri richiesti
     embed = discord.Embed(
-        title="<a:ciak:1334285912653434993> 𝐀𝐳𝐢𝐨𝐧𝐞  <a:progresso:1334288992547635394>",
+        title="🎬 𝐀𝐳𝐢𝐨𝐧𝐞 🎭 ",
         description=f"{interaction.user.mention} : {azione}",
         color=discord.Color.from_rgb(170, 142, 214) # Un viola elegante per le azioni RP
     )
@@ -284,7 +284,7 @@ async def bando_aperto(interaction: Interaction):
     if not any(r.id == RUOLO_STAFF_ID for r in interaction.user.roles) and not interaction.user.guild_permissions.administrator:
         return await interaction.response.send_message("❌ Non sei autorizzato.", ephemeral=True)
     
-    img_url = "https://cdn.discordapp.com/attachments/1483585343176310979/1483857765771378830/1773849369454.png?ex=69bc1dbc&is=69bacc3c&hm=8b8a8caeffb45c276b330eca0c799c4c3565f227cfe63f0277d7f96de3d58052&"
+    img_url = "https://cdn.discordapp.com/attachments/1483585343176310979/1483857765444227185/17738493694541.png?ex=69bc1dbc&is=69bacc3c&hm=e0adfb4ac0f2a73a3b604412a8e2c620adb9b5a3f083ca46bb08f8bef7812a5d&"
     
     embed = discord.Embed(
         title="📝 BANDI APERTI",
@@ -302,7 +302,7 @@ async def bando_chiuso(interaction: Interaction):
     if not any(r.id == RUOLO_STAFF_ID for r in interaction.user.roles) and not interaction.user.guild_permissions.administrator:
         return await interaction.response.send_message("❌ Non sei autorizzato.", ephemeral=True)
     
-    img_url = "https://cdn.discordapp.com/attachments/1483585343176310979/1483857765444227185/17738493694541.png?ex=69bc1dbc&is=69bacc3c&hm=e0adfb4ac0f2a73a3b604412a8e2c620adb9b5a3f083ca46bb08f8bef7812a5d&"
+    img_url = "https://cdn.discordapp.com/attachments/1483585343176310979/1483857765771378830/1773849369454.png?ex=69bc1dbc&is=69bacc3c&hm=8b8a8caeffb45c276b330eca0c799c4c3565f227cfe63f0277d7f96de3d58052&"
     
     embed = discord.Embed(
         title="🔒 BANDI CHIUSI",
