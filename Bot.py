@@ -182,41 +182,30 @@ async def cerca_item_smart(interaction: Interaction, nome_input: str, modo="item
     await view.wait()
     return view.value
 # --- COMANDO INIZIA RACCOLTA ---
-@bot.tree.command(name="inizia_rapina", description="Avvia una rapina e avvisa la polizia")
-@app_commands.describe(luogo="Cosa o dove stai rapinando? (es. Banca, Gioielleria, Market)")
-async def inizia_rapina(interaction: Interaction, luogo: str):
-    # Messaggio iniziale di conferma all'utente
-    await interaction.response.send_message(f"🚨 Hai avviato una rapina presso: **{luogo}**! La polizia è stata allertata.", ephemeral=True)
+@RUOLO_POLIZIA_ID = 1482856748250435918
+@bot.tree.command(name="inizia_rapina", description="Avvia una rapina con formato personalizzato")
+@app_commands.describe(rapina="Che tipo di rapina stai facendo? (es. Banca, Gioielleria)")
+async def inizia_rapina(interaction: Interaction, rapina: str):
+    # Messaggio di conferma effimero per chi esegue il comando
+    await interaction.response.send_message(f"✅ Allarme inviato per la rapina a: **{rapina}**", ephemeral=True)
     
-    # Embed di Allarme per la Polizia
-    embed_allarme = discord.Embed(
-        title="🚨 ALLARME RAPINA IN CORSO 🚨",
-        description=f"È stata segnalata una rapina attiva!",
-        color=discord.Color.red(),
-        timestamp=datetime.datetime.now()
+    # Formattazione richiesta dall'utente
+    messaggio_rapina = (
+        f"*__Attenzione__* <@&{RUOLO_CITTADINI_ID}> \n"
+        f"Allontanatevi dalla zona in quanto vi è il __pericolo__ di rimanere coinvolti in una sparatoria o essere scambiati per complici dei rapinatori. \n"
+        f"<@&{RUOLO_POLIZIA_ID}> se ne occuperà appena possibile.\n"
+        f"-***Posizione di {interaction.user.mention}***"
     )
-    embed_allarme.add_field(name="📍 Posizione/Obiettivo", value=f"**{luogo}**", inline=False)
-    embed_allarme.add_field(name="👤 Sospetto", value=f"{interaction.user.mention} ({interaction.user.name})", inline=True)
-    embed_allarme.add_field(name="⏳ Durata stimata", value="5 Minuti", inline=True)
-    embed_allarme.set_footer(text="Centrale Operativa - Intervenire immediatamente")
     
-    # Invia l'allarme taggando il ruolo polizia
-    messaggio_allarme = await interaction.channel.send(content=f"<@&{RUOLO_POLIZIA_ID}>", embed=embed_allarme)
+    # Invia il messaggio nel canale
+    await interaction.channel.send(content=messaggio_rapina)
     
     # Aspetta 5 minuti (300 secondi)
     await asyncio.sleep(300)
     
-    # Notifica di fine rapina
-    embed_fine = discord.Embed(
-        title="🏁 RAPINA TERMINATA",
-        description=f"Il tempo per la rapina presso **{luogo}** è scaduto.",
-        color=discord.Color.dark_grey()
-    )
-    embed_fine.add_field(name="Sospetto coinvolto", value=interaction.user.name, inline=True)
-    embed_fine.set_footer(text="Fine azione - Verificare la zona")
-    
-    await interaction.channel.send(content=f"{interaction.user.mention}", embed=embed_fine)
-    
+    # Messaggio di fine rapina
+    await interaction.channel.send(content=f"🏁 {interaction.user.mention}, hai terminato la rapina presso **{rapina}**.")
+
 @bot.tree.command(name="inizia_raccolta", description="Inizia la raccolta di qualcosa")
 @app_commands.describe(cosa="Cosa stai raccogliendo?")
 async def inizia_raccolta(interaction: discord.Interaction, cosa: str):
