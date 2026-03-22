@@ -4,6 +4,27 @@ import psycopg2
 import datetime
 from discord import app_commands
 from discord.ext import commands
+import os
+from keep_alive import keep_alive # Importa il file appena creato
+
+from flask import Flask
+from threading import Thread
+
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Platinum RP Bot is Online!"
+
+def run():
+    # Render assegna automaticamente una porta tramite la variabile PORT
+    import os
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
+
+def keep_alive():
+    t = Thread(target=run)
+    t.start()
 
 # --- CONFIGURAZIONE AMBIENTE (RENDER/LOCAL) ---
 TOKEN = os.getenv("DISCORD_TOKEN")
@@ -317,5 +338,7 @@ async def anonimo(itx: discord.Interaction, messaggio: str):
     await itx.channel.send(f"👤 **[ANONIMO]**: {messaggio}")
 
 if __name__ == "__main__":
+    # Avvia il server Flask in un thread separato
+    keep_alive()    
     bot.run(TOKEN)
 
