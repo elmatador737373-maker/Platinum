@@ -185,6 +185,74 @@ def inizializza_db():
     ]
     for q in queries:
         execute_query(q)
+
+@bot.tree.command(name="aiuto-rp", description="Mostra tutti i comandi disponibili su Platinum RP")
+async def aiuto(itx: discord.Interaction):
+    embed = discord.Embed(title="💎 Platinum Roleplay - Guida Comandi", color=discord.Color.from_rgb(229, 228, 226))
+    
+    embed.add_field(name="🚗 Veicoli", value="`/accendo-motore`, `/spengo-motore`, `/rifornimento`, `/ispeziona-veicolo`", inline=False)
+    embed.add_field(name="💰 Economia", value="`/portafoglio`, `/bancomat`, `/fattura`, `/compra-casa`", inline=False)
+    embed.add_field(name="👮 Legge", value="`/arresto`, `/perquisizione`, `/cerca-persona`, `/mostra-distintivo`, `/annuncio`", inline=False)
+    embed.add_field(name="🎭 Roleplay", value="`/me`, `/documenti`, `/morte`, `/cura`, `/bacio`, `/anonimo`", inline=False)
+    embed.add_field(name="⚙️ Staff", value="`/setup-ruoli`, `/give-money`, `/set-lavoro`, `/reset-inv`", inline=False)
+    
+    await itx.response.send_message(embed=embed, ephemeral=True)
+@bot.tree.command(name="borseggio", description="Tenta di rubare dalla tasca di un cittadino")
+@app_commands.checks.cooldown(1, 3600) # Una volta all'ora
+async def borseggio(itx: discord.Interaction, vittima: discord.Member):
+    await itx.response.defer()
+    import random
+
+    if vittima.id == itx.user.id:
+        return await itx.followup.send("❓ Stai provando a rubare a te stesso?")
+
+    # 20% di successo
+    if random.randint(1, 100) <= 20:
+        res_vittima = execute_query("SELECT contanti FROM utenti WHERE discord_id = %s", (str(vittima.id),), fetch=True)
+        if not res_vittima or res_vittima[0] < 50:
+            return await itx.followup.send(f"💸 Hai frugato nelle tasche di {vittima.mention} ma è al verde!")
+
+        bottino = random.randint(10, int(res_vittima[0] * 0.3)) # Ruba fino al 30% dei contanti
+        execute_query("UPDATE utenti SET contanti = contanti - %s WHERE discord_id = %s", (bottino, str(vittima.id)))
+        execute_query("UPDATE utenti SET contanti = contanti + %s WHERE discord_id = %s", (bottino, str(itx.user.id)))
+        
+        await itx.followup.send(f"🥷 Sei un ombra! Hai sfilato **${bottino}** a {vittima.mention} senza farti notare.")
+    else:
+        await itx.followup.send(f"🚨 Ti sei fatto scoprire! {vittima.mention} ha sentito la tua mano in tasca!")
+@bot.tree.command(name="annuncio", description="[STAFF/POLIZIA] Invia un annuncio globale Platinum RP")
+async def annuncio(itx: discord.Interaction, titolo: str, messaggio: str):
+    await itx.response.defer()
+    
+    # Controllo se l'utente ha il ruolo Staff o Polizia
+    res = execute_query("SELECT staff_id, polizia_id FROM config_ruoli WHERE guild_id = %s", (str(itx.guild.id),), fetch=True)
+    is_auth = any(r.id in [int(res[0]), int(res[1])] for r in itx.user.roles if res)
+
+    if not is_auth:
+        return await itx.followup.send("❌ Non hai i permessi per inviare annunci globali.")
+
+    embed = discord.Embed(title=f"📢 {titolo.upper()}", description=messaggio, color=discord.Color.red())
+    embed.set_author(name="Platinum Roleplay - Comunicazione Ufficiale")
+    embed.set_footer(text=f"Inviato da: {itx.user.display_name}")
+    
+    await itx.channel.send(content="@everyone", embed=embed)
+    await itx.followup.send("✅ Annuncio inviato.", ephemeral=True)
+
+@bot.tree.command(name="cerca-persona", description="[POLIZIA] Cerca un cittadino nel database Platinum")
+async def cerca_persona(itx: discord.Interaction, cittadino: discord.Member):
+    await itx.response.defer()
+    
+    # Query per vedere fedina penale (tabella arresti)
+    arresti = execute_query_all("SELECT motivo FROM arresti WHERE detenuto_id = %s", (str(cittadino.id),))
+    
+    embed = discord.Embed(title=f"📑 Archivio Centrale Platinum: {cittadino.display_name}", color=discord.Color.blue())
+    if arresti:
+        lista_crimini = "\n".join([f"- {a[0]}" for a in arresti])
+        embed.add_field(name="Precedenti Penali", value=lista_crimini, inline=False)
+    else:
+        embed.add_field(name="Fedina Penale", value="Limpida - Nessun precedente trovato.", inline=False)
+    
+    await itx.followup.send(embed=embed)
+
 @bot.tree.command(name="morte", description="Segnala che sei finito a terra incosciente")
 async def morte(itx: discord.Interaction):
     # Invia un log nel canale dove viene usato, ma potresti anche mandarlo in un canale 'dispatch'
