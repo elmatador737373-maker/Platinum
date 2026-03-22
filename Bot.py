@@ -24,6 +24,23 @@ def execute_query_all(query, params=None):
             cur.execute(query, params)
             return cur.fetchall()
 
+def inizializza_db():
+    queries = [
+        # ... tabelle precedenti ...
+        """
+        CREATE TABLE IF NOT EXISTS fatture (
+            id SERIAL PRIMARY KEY,
+            emittente_id TEXT,
+            destinatario_id TEXT,
+            importo INTEGER,
+            causale TEXT,
+            stato TEXT DEFAULT 'Pendente'
+        );
+        """
+    ]
+    for q in queries:
+        execute_query(q)
+
 # --- CLASSE CORE DEL BOT ---
 class VinewoodBot(commands.Bot):
     def __init__(self):
@@ -168,6 +185,68 @@ def inizializza_db():
     ]
     for q in queries:
         execute_query(q)
+@bot.tree.command(name="morte", description="Segnala che sei finito a terra incosciente")
+async def morte(itx: discord.Interaction):
+    # Invia un log nel canale dove viene usato, ma potresti anche mandarlo in un canale 'dispatch'
+    await itx.response.send_message(f"🚑 **[DISPATCH EMS]**: Un cittadino ({itx.user.mention}) è a terra incosciente a {itx.channel.name}! Richiesto intervento immediato.")
+
+@bot.tree.command(name="cura", description="[MEDICO] Rianima un cittadino ferito")
+async def cura(itx: discord.Interaction, cittadino: discord.Member):
+    await itx.response.defer()
+    
+    # Controllo ruolo Medico dal DB
+    res = execute_query("SELECT medico_id FROM config_ruoli WHERE guild_id = %s", (str(itx.guild.id),), fetch=True)
+    if not res or not any(r.id == int(res[0]) for r in itx.user.roles):
+        return await itx.followup.send("❌ Solo il personale medico può utilizzare questo comando.")
+
+    await itx.followup.send(f"💉 {itx.user.mention} ha prestato le prime cure a {cittadino.mention}. Il cittadino è ora fuori pericolo!")
+@bot.tree.command(name="modifica-libretto", description="[MECCANICO] Cambia il proprietario registrato di un veicolo")
+async def mod_libretto(itx: discord.Interaction, targa: str, nuovo_proprietario: discord.Member):
+    await itx.response.defer()
+    
+    res_m = execute_query("SELECT meccanico_id FROM config_ruoli WHERE guild_id = %s", (str(itx.guild.id),), fetch=True)
+    if not res_m or not any(r.id == int(res_m[0]) for r in itx.user.roles):
+        return await itx.followup.send("❌ Permesso negato. Devi essere un Meccanico.")
+
+    execute_query("UPDATE veicoli SET proprietario_id = %s WHERE targa = %s", (str(nuovo_proprietario.id), targa.upper()))
+    await itx.followup.send(f"📑 Il libretto del veicolo **{targa.upper()}** è stato aggiornato. Nuovo proprietario: {nuovo_proprietario.mention}")
+@bot.tree.command(name="fattura", description="Emetti una fattura a un cittadino")
+async def fattura(itx: discord.Interaction, utente: discord.Member, importo: int, causale: str):
+    await itx.response.defer()
+    
+    # Salviamo la fattura nel DB (aggiungi la tabella 'fatture' se vuoi renderle pagabili via comando)
+    # Per ora facciamo un'emissione testuale ufficiale
+    embed = discord.Embed(title="📄 FATTURA ELETTRONICA", color=discord.Color.gold())
+    embed.add_field(name="Emittente", value=itx.user.display_name, inline=True)
+    embed.add_field(name="Destinatario", value=utente.display_name, inline=True)
+    embed.add_field(name="Importo", value=f"${importo}", inline=False)
+    embed.add_field(name="Causale", value=causale, inline=False)
+    embed.set_footer(text="Pagabile presso la banca o via comando /paga-fattura")
+    
+    await itx.followup.send(content=f"{utente.mention}, hai ricevuto una nuova fattura!", embed=embed)
+@bot.tree.command(name="documenti", description="Mostra i tuoi documenti a un altro cittadino")
+async def documenti(itx: discord.Interaction, utente: discord.Member):
+    await itx.response.defer()
+    
+    res = execute_query("SELECT lavoro FROM utenti WHERE discord_id = %s", (str(itx.user.id),), fetch=True)
+    lavoro = res[0] if res else "Civile"
+    
+    embed = discord.Embed(title="🪪 DOCUMENTO D'IDENTITÀ", color=discord.Color.dark_blue())
+    embed.add_field(name="Nome", value=itx.user.display_name, inline=True)
+    embed.add_field(name="Professione", value=lavoro, inline=True)
+    embed.set_thumbnail(url=itx.user.display_avatar.url)
+    
+    await itx.followup.send(f"{utente.mention}, {itx.user.mention} ti ha mostrato i documenti.", embed=embed)
+
+@bot.tree.command(name="bacio", description="Manda un bacio a qualcuno")
+async def bacio(itx: discord.Interaction, utente: discord.Member):
+    await itx.response.send_message(f"💋 {itx.user.mention} ha dato un bacio a {utente.mention}!")
+
+@bot.tree.command(name="anonimo", description="Invia un messaggio nel Deep Web")
+async def anonimo(itx: discord.Interaction, messaggio: str):
+    # Messaggio che non mostra chi lo ha inviato nel canale pubblico
+    await itx.response.send_message("Messaggio inviato nell'ombra...", ephemeral=True)
+    await itx.channel.send(f"👤 **[ANONIMO]**: {messaggio}")
 
 if __name__ == "__main__":
     bot.run(TOKEN)
