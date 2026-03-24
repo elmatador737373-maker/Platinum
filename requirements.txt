@@ -3,3 +3,4 @@ pymongo
 dnspython
 flask
 psycopg2-binary
+gunicorn
