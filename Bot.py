@@ -1,341 +1,191 @@
-import os
 import discord
-import psycopg2
-import datetime
-from discord import app_commands
+from discord import app_commands, ui
 from discord.ext import commands
+import psycopg2
 import os
-from flask import Flask
-import threading
-import os
+import random
+import string
 
-app = Flask(__name__)
-
-@app.route('/')
-def index():
-    return "Bot is alive!"
-
-def run():
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
-
-# Avvia Flask in un thread separato così non blocca il resto del bot
-threading.Thread(target=run).start()
-
-
-# --- CONFIGURAZIONE AMBIENTE (RENDER/LOCAL) ---
 TOKEN = os.getenv("DISCORD_TOKEN")
-DB_URI = os.getenv("DB_URL") # Stringa di connessione PostgreSQL di Supabase
+DB_URL = os.getenv("DATABASE_URL")
 
-# --- HELPER DATABASE ---
-def execute_query(query, params=None, fetch=False):
-    with psycopg2.connect(DB_URI) as conn:
+def db_execute(query, params=None, fetch=False):
+    with psycopg2.connect(DB_URL) as conn:
         with conn.cursor() as cur:
             cur.execute(query, params)
-            if fetch:
-                return cur.fetchone() if "SELECT" in query.upper() else None
+            if fetch: return cur.fetchall()
             conn.commit()
 
-def execute_query_all(query, params=None):
-    with psycopg2.connect(DB_URI) as conn:
-        with conn.cursor() as cur:
-            cur.execute(query, params)
-            return cur.fetchall()
-
-def inizializza_db():
-    queries = [
-        # ... tabelle precedenti ...
-        """
-        CREATE TABLE IF NOT EXISTS fatture (
-            id SERIAL PRIMARY KEY,
-            emittente_id TEXT,
-            destinatario_id TEXT,
-            importo INTEGER,
-            causale TEXT,
-            stato TEXT DEFAULT 'Pendente'
-        );
-        """
-    ]
-    for q in queries:
-        execute_query(q)
-
-# --- CLASSE CORE DEL BOT ---
-class VinewoodBot(commands.Bot):
+class RPBot(commands.Bot):
     def __init__(self):
-        intents = discord.Intents.all()
-        super().__init__(command_prefix="!", intents=intents)
-
+        super().__init__(command_prefix="!", intents=discord.Intents.all())
     async def setup_hook(self):
-        inizializza_db()
         await self.tree.sync()
-        print(f"✅ Bot Online: {self.user} | Comandi Sincronizzati")
 
-bot = VinewoodBot()
+bot = RPBot()
 
-# ==========================================
-# 1. CATEGORIA: SETUP & RUOLI
-# ==========================================
-class RoleDropdown(discord.ui.Select):
-    def __init__(self, placeholder, db_column, roles):
-        options = [discord.SelectOption(label=r.name, value=str(r.id)) for r in roles[:25]]
-        super().__init__(placeholder=placeholder, options=options, custom_id=db_column)
-
-    async def callback(self, itx: discord.Interaction):
-        await itx.response.defer(ephemeral=True)
-        query = f"""
-            INSERT INTO config_ruoli (guild_id, {self.custom_id}) VALUES (%s, %s)
-            ON CONFLICT (guild_id) DO UPDATE SET {self.custom_id} = EXCLUDED.{self.custom_id};
-        """
-        execute_query(query, (str(itx.guild.id), self.values[0]))
-        await itx.followup.send(f"✅ Ruolo per `{self.custom_id}` salvato!", ephemeral=True)
-
-class SetupView(discord.ui.View):
-    def __init__(self, roles):
-        super().__init__(timeout=None)
-        self.add_item(RoleDropdown("Ruolo Polizia", "polizia_id", roles))
-        self.add_item(RoleDropdown("Ruolo Meccanico", "meccanico_id", roles))
-        self.add_item(RoleDropdown("Ruolo Medico", "medico_id", roles))
-        self.add_item(RoleDropdown("Ruolo Staff", "staff_id", roles))
-
-@bot.tree.command(name="setup-ruoli", description="Configura i ruoli lavorativi del server")
+# --- ⚙️ SETUP & CONFIG ---
+@bot.tree.command(name="setup_server")
 @app_commands.checks.has_permissions(administrator=True)
-async def setup_ruoli(itx: discord.Interaction):
-    roles = [r for r in itx.guild.roles if not r.managed and not r.is_default()]
-    await itx.response.send_message("⚙️ **Configurazione Ruoli RP**", view=SetupView(roles), ephemeral=True)
+async def setup(it: discord.Interaction, cittadino: discord.Role, polizia: discord.Role, meccanico: discord.Role, staff: discord.Role):
+    db_execute("INSERT INTO config_server VALUES (%s,%s,%s,%s,%s) ON CONFLICT (guild_id) DO UPDATE SET ruolo_polizia=EXCLUDED.ruolo_polizia, ruolo_cittadino=EXCLUDED.ruolo_cittadino, ruolo_meccanico=EXCLUDED.ruolo_meccanico, ruolo_staff=EXCLUDED.ruolo_staff", (it.guild.id, polizia.id, cittadino.id, meccanico.id, staff.id))
+    await it.response.send_message("✅ Server Configurato!")
 
-# ==========================================
-# 2. CATEGORIA: VEICOLI & CARBURANTE
-# ==========================================
-@bot.tree.command(name="accendo-motore", description="Avvia il motore (inizia il consumo)")
-async def accendo(itx: discord.Interaction, targa: str):
-    await itx.response.defer()
-    targa = targa.upper()
-    res = execute_query("SELECT carburante FROM veicoli WHERE targa = %s", (targa,), fetch=True)
-    
-    if not res: return await itx.followup.send("❌ Veicolo non registrato.")
-    if res[0] <= 0: return await itx.followup.send("🪫 Serbatoio vuoto. Il motore non parte!")
+# --- 📱 TELEFONO & BANCA ---
+class BankModal(ui.Modal, title="Operazione Bancaria"):
+    amount = ui.TextInput(label="Cifra")
+    def __init__(self, mode):
+        super().__init__()
+        self.mode = mode
+    async def on_submit(self, it: discord.Interaction):
+        val = int(self.amount.value)
+        if self.mode == "dep":
+            db_execute("UPDATE utenti SET contanti=contanti-%s, banca=banca+%s WHERE user_id=%s", (val, val, it.user.id))
+        else:
+            db_execute("UPDATE utenti SET banca=banca-%s, contanti=contanti+%s WHERE user_id=%s", (val, val, it.user.id))
+        await it.response.send_message(f"✅ Operazione di {val}€ completata!", ephemeral=True)
 
-    execute_query("UPDATE veicoli SET ultimo_avvio = %s WHERE targa = %s", (datetime.datetime.now(), targa))
-    await itx.followup.send(f"🔑 Motore avviato per **{targa}**. Benzina: **{res[0]:.1f}%**")
+class PhoneView(ui.View):
+    @ui.button(label="Deposita", style=discord.ButtonStyle.green)
+    async def dep(self, it, b): await it.response.send_modal(BankModal("dep"))
+    @ui.button(label="Preleva", style=discord.ButtonStyle.red)
+    async def pre(self, it, b): await it.response.send_modal(BankModal("pre"))
 
-@bot.tree.command(name="spengo-motore", description="Spegne il motore e salva il consumo")
-async def spengo(itx: discord.Interaction, targa: str):
-    await itx.response.defer()
-    targa = targa.upper()
-    res = execute_query("SELECT ultimo_avvio, carburante FROM veicoli WHERE targa = %s", (targa,), fetch=True)
-    
-    if not res or res[0] is None: return await itx.followup.send("❌ Il motore non era acceso.")
+@bot.tree.command(name="telefono")
+async def telefono(it: discord.Interaction):
+    res = db_execute("SELECT numero_tel FROM utenti WHERE user_id=%s", (it.user.id,), fetch=True)
+    num = res[0][0] if res else "".join(random.choices(string.digits, k=7))
+    if not res: db_execute("INSERT INTO utenti (user_id, numero_tel) VALUES (%s,%s)", (it.user.id, num))
+    await it.response.send_message(f"📱 iFruit | Numero: {num}", view=PhoneView(), ephemeral=True)
 
-    durata = (datetime.datetime.now() - res[0]).total_seconds() / 60
-    consumo = durata * 0.4 # 0.4% al minuto
-    nuovo_lv = max(0, res[1] - consumo)
+@bot.tree.command(name="portafoglio")
+async def portafoglio(it: discord.Interaction):
+    res = db_execute("SELECT contanti, banca, punti_patente FROM utenti WHERE user_id=%s", (it.user.id,), fetch=True)
+    await it.response.send_message(f"👛 Contanti: {res[0][0]}€ | 🏦 Banca: {res[0][1]}€ | 🚗 Punti: {res[0][2]}/20")
 
-    execute_query("UPDATE veicoli SET carburante = %s, ultimo_avvio = NULL WHERE targa = %s", (nuovo_lv, targa))
-    await itx.followup.send(f"🔌 Motore spento. Consumato: **{consumo:.2f}%**. Residuo: **{nuovo_lv:.1f}%**")
+# --- 🎒 INVENTARIO & SHOP ---
+@bot.tree.command(name="crea_item_shop")
+async def c_item(it: discord.Interaction, nome: str, prezzo: int, ruolo: discord.Role = None):
+    rid = ruolo.id if ruolo else None
+    db_execute("INSERT INTO shop_items VALUES (%s,%s,%s)", (nome, prezzo, rid))
+    await it.response.send_message(f"✅ Item {nome} aggiunto.")
 
-@bot.tree.command(name="rifornimento", description="Fai benzina ($1.50 per 1%)")
-async def benzina(itx: discord.Interaction, targa: str, percentuale: float):
-    await itx.response.defer()
-    costo = percentuale * 1.50
-    user_id = str(itx.user.id)
-
-    soldi = execute_query("SELECT contanti FROM utenti WHERE discord_id = %s", (user_id,), fetch=True)
-    if not soldi or soldi[0] < costo:
-        return await itx.followup.send(f"❌ Ti servono **${costo:.2f}** in contanti.")
-
-    res_v = execute_query("SELECT carburante FROM veicoli WHERE targa = %s", (targa.upper(),), fetch=True)
-    if not res_v: return await itx.followup.send("❌ Veicolo inesistente.")
-
-    nuovo_c = min(100.0, res_v[0] + percentuale)
-    execute_query("UPDATE utenti SET contanti = contanti - %s WHERE discord_id = %s", (costo, user_id))
-    execute_query("UPDATE veicoli SET carburante = %s WHERE targa = %s", (nuovo_c, targa.upper()))
-    
-    await itx.followup.send(f"⛽ Rifornimento: +{percentuale}% | Pagato: **${costo:.2f}**")
-
-# ==========================================
-# 3. CATEGORIA: ECONOMIA & INVENTARIO
-# ==========================================
-@bot.tree.command(name="portafoglio", description="Mostra i tuoi averi")
-async def portafoglio(itx: discord.Interaction):
-    await itx.response.defer(ephemeral=True)
-    res = execute_query("SELECT contanti, banca FROM utenti WHERE discord_id = %s", (str(itx.user.id),), fetch=True)
-    if res:
-        await itx.followup.send(f"💵 **Contanti:** ${res[0]}\n💳 **Banca:** ${res[1]}")
+@bot.tree.command(name="compra")
+async def compra(it: discord.Interaction, ricerca: str):
+    res = db_execute("SELECT nome, prezzo FROM shop_items WHERE nome ILIKE %s", (f"%{ricerca}%",), fetch=True)
+    if not res: return await it.response.send_message("❌ Nessun match.")
+    if len(res) > 1:
+        options = [discord.SelectOption(label=f"{n} ({p}€)", value=n) for n, p in res]
+        view = ui.View()
+        select = ui.Select(placeholder="Scegli l'item esatto...", options=options)
+        async def callback(i: discord.Interaction):
+            n_sel = select.values[0]
+            prezzo = next(p for n, p in res if n == n_sel)
+            db_execute("UPDATE utenti SET contanti=contanti-%s WHERE user_id=%s", (prezzo, i.user.id))
+            db_execute("INSERT INTO inventario (user_id, item_nome) VALUES (%s,%s)", (i.user.id, n_sel))
+            await i.response.send_message(f"🛒 Acquistato {n_sel}!")
+        select.callback = callback
+        view.add_item(select)
+        await it.response.send_message("Troppe corrispondenze, seleziona:", view=view, ephemeral=True)
     else:
-        await itx.followup.send("❌ Profilo non trovato. Usa `/inizia-rp`.")
+        n, p = res[0]
+        db_execute("UPDATE utenti SET contanti=contanti-%s WHERE user_id=%s", (p, it.user.id))
+        db_execute("INSERT INTO inventario (user_id, item_nome) VALUES (%s,%s)", (it.user.id, n))
+        await it.response.send_message(f"🛒 Acquistato {n}!")
 
-@bot.tree.command(name="perquisizione", description="[POLIZIA] Controlla un cittadino")
-async def perquisisci(itx: discord.Interaction, cittadino: discord.Member):
-    await itx.response.defer()
-    # Controllo ruolo polizia
-    p_role = execute_query("SELECT polizia_id FROM config_ruoli WHERE guild_id = %s", (str(itx.guild.id),), fetch=True)
-    if not p_role or not any(r.id == int(p_role[0]) for r in itx.user.roles):
-        return await itx.followup.send("❌ Non sei autorizzato (Polizia).")
+@bot.tree.command(name="inventario")
+async def inv(it: discord.Interaction):
+    res = db_execute("SELECT item_nome FROM inventario WHERE user_id=%s", (it.user.id,), fetch=True)
+    await it.response.send_message(f"🎒 Inventario:\n" + "\n".join([f"- {r[0]}" for r in res]) if res else "Vuoto.")
 
-    soldi = execute_query("SELECT contanti FROM utenti WHERE discord_id = %s", (str(cittadino.id),), fetch=True)
-    items = execute_query_all("SELECT item_name, quantita FROM inventari WHERE user_id = %s", (str(cittadino.id),))
+@bot.tree.command(name="usa")
+async def usa(it: discord.Interaction, item: str):
+    res = db_execute("SELECT id FROM inventario WHERE user_id=%s AND item_nome=%s LIMIT 1", (it.user.id, item), fetch=True)
+    if not res: return await it.response.send_message("❌ Non hai questo item.")
+    db_execute("DELETE FROM inventario WHERE id=%s", (res[0][0],))
+    await it.response.send_message(f"✨ Hai usato {item}.")
+
+# --- 🏢 FAZIONI & DEPOSITO ---
+@bot.tree.command(name="crea_fazione")
+async def c_faz(it: discord.Interaction, nome: str, ruolo: discord.Role):
+    db_execute("INSERT INTO fazioni (nome, ruolo_id) VALUES (%s,%s)", (nome, ruolo.id))
+    await it.response.send_message(f"🏢 Fazione {nome} creata per {ruolo.name}.")
+
+@bot.tree.command(name="deposito")
+async def deposito(it: discord.Interaction):
+    faz_disponibili = db_execute("SELECT nome, ruolo_id FROM fazioni", fetch=True)
+    mie_faz = [f[0] for f in faz_disponibili if it.user.get_role(f[1])]
+    if not mie_faz: return await it.response.send_message("❌ Non appartieni a nessuna fazione.")
     
-    lista = "\n".join([f"- {i[0]} x{i[1]}" for i in items]) if items else "Nessun oggetto."
-    await itx.followup.send(f"🔍 **Perquisizione: {cittadino.display_name}**\n💵 Contanti: **${soldi[0] if soldi else 0}**\n🎒 Oggetti:\n{lista}")
+    view = ui.View()
+    select = ui.Select(placeholder="Scegli il deposito da aprire", options=[discord.SelectOption(label=n) for n in mie_faz])
+    async def callback(i: discord.Interaction):
+        f_sel = select.values[0]
+        res = db_execute("SELECT fondo_cassa FROM fazioni WHERE nome=%s", (f_sel,), fetch=True)
+        items = db_execute("SELECT item_nome FROM magazzino_fazione WHERE fazione_nome=%s", (f_sel,), fetch=True)
+        msg = f"📦 **Deposito {f_sel}**\n💰 Fondo: {res[0][0]}€\n🎒 Items: {', '.join([r[0] for r in items]) if items else 'Nessuno'}"
+        await i.response.send_message(msg, ephemeral=True)
+    select.callback = callback
+    view.add_item(select)
+    await it.response.send_message("Seleziona fazione:", view=view, ephemeral=True)
 
-# ==========================================
-# 4. CATEGORIA: STAFF & UTILITY
-# ==========================================
-@bot.tree.command(name="me", description="Azione Roleplay")
-async def me(itx: discord.Interaction, azione: str):
-    await itx.response.send_message(f"*** {itx.user.display_name} {azione} ***")
+# --- 🚗 MECCANICO & VEICOLI ---
+@bot.tree.command(name="registra_veicolo")
+async def reg_v(it: discord.Interaction, utente: discord.Member, modello: str):
+    targa = "".join(random.choices(string.ascii_uppercase + string.digits, k=7))
+    db_execute("INSERT INTO veicoli VALUES (%s,%s,%s)", (targa, utente.id, modello))
+    chiave = f":chiavi: | Chiavi ({modello}) [{targa}]"
+    db_execute("INSERT INTO inventario (user_id, item_nome) VALUES (%s,%s)", (utente.id, chiave))
+    await it.response.send_message(f"🚗 {modello} registrato! Targa: {targa}")
 
-@bot.tree.command(name="give-money", description="[STAFF] Regala soldi")
-async def give_money(itx: discord.Interaction, utente: discord.Member, ammontare: int):
-    await itx.response.defer()
-    execute_query("UPDATE utenti SET banca = banca + %s WHERE discord_id = %s", (ammontare, str(utente.id)))
-    await itx.followup.send(f"✅ Accreditati **${ammontare}** a {utente.mention}.")
+@bot.tree.command(name="guida_veicolo")
+async def guida(it: discord.Interaction):
+    res = db_execute("SELECT modello, targa FROM veicoli WHERE owner_id=%s", (it.user.id,), fetch=True)
+    if not res: return await it.response.send_message("❌ Non hai veicoli.")
+    view = ui.View()
+    select = ui.Select(options=[discord.SelectOption(label=f"{m} [{t}]", value=t) for m, t in res])
+    select.callback = lambda i: i.response.send_message(f"🚘 Hai messo in moto il veicolo {select.values[0]}")
+    view.add_item(select)
+    await it.response.send_message("Scegli veicolo da guidare:", view=view, ephemeral=True)
 
-# ==========================================
-# INIZIALIZZAZIONE DB (In fondo al file)
-# ==========================================
-def inizializza_db():
-    queries = [
-        """CREATE TABLE IF NOT EXISTS config_ruoli (guild_id TEXT PRIMARY KEY, polizia_id TEXT, meccanico_id TEXT, medico_id TEXT, staff_id TEXT);""",
-        """CREATE TABLE IF NOT EXISTS utenti (discord_id TEXT PRIMARY KEY, contanti INTEGER DEFAULT 500, banca INTEGER DEFAULT 2000, lavoro TEXT DEFAULT 'Civile');""",
-        """CREATE TABLE IF NOT EXISTS veicoli (targa TEXT PRIMARY KEY, proprietario_id TEXT, modello TEXT, integrita INTEGER DEFAULT 100, carburante FLOAT DEFAULT 100.0, ultimo_avvio TIMESTAMP);""",
-        """CREATE TABLE IF NOT EXISTS inventari (id SERIAL PRIMARY KEY, user_id TEXT, item_name TEXT, quantita INTEGER DEFAULT 1);"""
-    ]
-    for q in queries:
-        execute_query(q)
+# --- 👮 POLIZIA ---
+@bot.tree.command(name="ammanetta")
+async def ammanetta(it, utente: discord.Member): await it.response.send_message(f"👮 {it.user.name} ha ammanettato {utente.mention}.")
+@bot.tree.command(name="smanetta")
+async def smanetta(it, utente: discord.Member): await it.response.send_message(f"🔓 {it.user.name} ha smanettato {utente.mention}.")
 
-@bot.tree.command(name="aiuto-rp", description="Mostra tutti i comandi disponibili su Platinum RP")
-async def aiuto(itx: discord.Interaction):
-    embed = discord.Embed(title="💎 Platinum Roleplay - Guida Comandi", color=discord.Color.from_rgb(229, 228, 226))
-    
-    embed.add_field(name="🚗 Veicoli", value="`/accendo-motore`, `/spengo-motore`, `/rifornimento`, `/ispeziona-veicolo`", inline=False)
-    embed.add_field(name="💰 Economia", value="`/portafoglio`, `/bancomat`, `/fattura`, `/compra-casa`", inline=False)
-    embed.add_field(name="👮 Legge", value="`/arresto`, `/perquisizione`, `/cerca-persona`, `/mostra-distintivo`, `/annuncio`", inline=False)
-    embed.add_field(name="🎭 Roleplay", value="`/me`, `/documenti`, `/morte`, `/cura`, `/bacio`, `/anonimo`", inline=False)
-    embed.add_field(name="⚙️ Staff", value="`/setup-ruoli`, `/give-money`, `/set-lavoro`, `/reset-inv`", inline=False)
-    
-    await itx.response.send_message(embed=embed, ephemeral=True)
-@bot.tree.command(name="borseggio", description="Tenta di rubare dalla tasca di un cittadino")
-@app_commands.checks.cooldown(1, 3600) # Una volta all'ora
-async def borseggio(itx: discord.Interaction, vittima: discord.Member):
-    await itx.response.defer()
-    import random
+@bot.tree.command(name="ricerca_cittadino")
+async def ric_c(it, utente: discord.Member):
+    res = db_execute("SELECT documento, punti_patente, patente FROM utenti WHERE user_id=%s", (utente.id,), fetch=True)
+    await it.response.send_message(f"🔍 Dati {utente.name}:\n🪪 Doc: {res[0][0]}\n📉 Punti: {res[0][1]}\n🚗 Patente: {res[0][2]}")
 
-    if vittima.id == itx.user.id:
-        return await itx.followup.send("❓ Stai provando a rubare a te stesso?")
+# --- 🪪 DOCUMENTI ---
+@bot.tree.command(name="crea_documento")
+async def c_doc(it: discord.Interaction, nome: str, cognome: str):
+    db_execute("UPDATE utenti SET documento=%s, patente='Valida', punti_patente=20 WHERE user_id=%s", (f"{nome} {cognome}", it.user.id))
+    await it.response.send_message("🪪 Documento e Patente creati!")
 
-    # 20% di successo
-    if random.randint(1, 100) <= 20:
-        res_vittima = execute_query("SELECT contanti FROM utenti WHERE discord_id = %s", (str(vittima.id),), fetch=True)
-        if not res_vittima or res_vittima[0] < 50:
-            return await itx.followup.send(f"💸 Hai frugato nelle tasche di {vittima.mention} ma è al verde!")
+# --- 🛠️ STAFF ---
+@bot.tree.command(name="staff_aggiungi_item")
+async def s_a_i(it, utente: discord.Member, item: str):
+    db_execute("INSERT INTO inventario (user_id, item_nome) VALUES (%s,%s)", (utente.id, item))
+    await it.response.send_message(f"✅ Staff ha dato {item} a {utente.name}")
 
-        bottino = random.randint(10, int(res_vittima[0] * 0.3)) # Ruba fino al 30% dei contanti
-        execute_query("UPDATE utenti SET contanti = contanti - %s WHERE discord_id = %s", (bottino, str(vittima.id)))
-        execute_query("UPDATE utenti SET contanti = contanti + %s WHERE discord_id = %s", (bottino, str(itx.user.id)))
-        
-        await itx.followup.send(f"🥷 Sei un ombra! Hai sfilato **${bottino}** a {vittima.mention} senza farti notare.")
-    else:
-        await itx.followup.send(f"🚨 Ti sei fatto scoprire! {vittima.mention} ha sentito la tua mano in tasca!")
-@bot.tree.command(name="annuncio", description="[STAFF/POLIZIA] Invia un annuncio globale Platinum RP")
-async def annuncio(itx: discord.Interaction, titolo: str, messaggio: str):
-    await itx.response.defer()
-    
-    # Controllo se l'utente ha il ruolo Staff o Polizia
-    res = execute_query("SELECT staff_id, polizia_id FROM config_ruoli WHERE guild_id = %s", (str(itx.guild.id),), fetch=True)
-    is_auth = any(r.id in [int(res[0]), int(res[1])] for r in itx.user.roles if res)
+@bot.tree.command(name="staff_aggiungi_soldi")
+async def s_a_s(it, utente: discord.Member, soldi: int):
+    db_execute("UPDATE utenti SET contanti=contanti+%s WHERE user_id=%s", (soldi, utente.id))
+    await it.response.send_message(f"✅ Staff ha dato {soldi}€ a {utente.name}")
 
-    if not is_auth:
-        return await itx.followup.send("❌ Non hai i permessi per inviare annunci globali.")
+# --- 💸 SCAMBI & FATTURE ---
+@bot.tree.command(name="dai_soldi")
+async def dai_s(it, utente: discord.Member, soldi: int):
+    db_execute("UPDATE utenti SET contanti=contanti-%s WHERE user_id=%s", (soldi, it.user.id))
+    db_execute("UPDATE utenti SET contanti=contanti+%s WHERE user_id=%s", (soldi, utente.id))
+    await it.response.send_message(f"💸 Hai dato {soldi}€ a {utente.name}")
 
-    embed = discord.Embed(title=f"📢 {titolo.upper()}", description=messaggio, color=discord.Color.red())
-    embed.set_author(name="Platinum Roleplay - Comunicazione Ufficiale")
-    embed.set_footer(text=f"Inviato da: {itx.user.display_name}")
-    
-    await itx.channel.send(content="@everyone", embed=embed)
-    await itx.followup.send("✅ Annuncio inviato.", ephemeral=True)
+@bot.tree.command(name="fattura")
+async def fat(it, utente: discord.Member, euro: int, causale: str):
+    db_execute("INSERT INTO fatture (emittente_id, destinatario_id, importo, causale) VALUES (%s,%s,%s,%s)", (it.user.id, utente.id, euro, causale))
+    await it.response.send_message(f"📑 Fattura inviata a {utente.name}")
 
-@bot.tree.command(name="cerca-persona", description="[POLIZIA] Cerca un cittadino nel database Platinum")
-async def cerca_persona(itx: discord.Interaction, cittadino: discord.Member):
-    await itx.response.defer()
-    
-    # Query per vedere fedina penale (tabella arresti)
-    arresti = execute_query_all("SELECT motivo FROM arresti WHERE detenuto_id = %s", (str(cittadino.id),))
-    
-    embed = discord.Embed(title=f"📑 Archivio Centrale Platinum: {cittadino.display_name}", color=discord.Color.blue())
-    if arresti:
-        lista_crimini = "\n".join([f"- {a[0]}" for a in arresti])
-        embed.add_field(name="Precedenti Penali", value=lista_crimini, inline=False)
-    else:
-        embed.add_field(name="Fedina Penale", value="Limpida - Nessun precedente trovato.", inline=False)
-    
-    await itx.followup.send(embed=embed)
-
-@bot.tree.command(name="morte", description="Segnala che sei finito a terra incosciente")
-async def morte(itx: discord.Interaction):
-    # Invia un log nel canale dove viene usato, ma potresti anche mandarlo in un canale 'dispatch'
-    await itx.response.send_message(f"🚑 **[DISPATCH EMS]**: Un cittadino ({itx.user.mention}) è a terra incosciente a {itx.channel.name}! Richiesto intervento immediato.")
-
-@bot.tree.command(name="cura", description="[MEDICO] Rianima un cittadino ferito")
-async def cura(itx: discord.Interaction, cittadino: discord.Member):
-    await itx.response.defer()
-    
-    # Controllo ruolo Medico dal DB
-    res = execute_query("SELECT medico_id FROM config_ruoli WHERE guild_id = %s", (str(itx.guild.id),), fetch=True)
-    if not res or not any(r.id == int(res[0]) for r in itx.user.roles):
-        return await itx.followup.send("❌ Solo il personale medico può utilizzare questo comando.")
-
-    await itx.followup.send(f"💉 {itx.user.mention} ha prestato le prime cure a {cittadino.mention}. Il cittadino è ora fuori pericolo!")
-@bot.tree.command(name="modifica-libretto", description="[MECCANICO] Cambia il proprietario registrato di un veicolo")
-async def mod_libretto(itx: discord.Interaction, targa: str, nuovo_proprietario: discord.Member):
-    await itx.response.defer()
-    
-    res_m = execute_query("SELECT meccanico_id FROM config_ruoli WHERE guild_id = %s", (str(itx.guild.id),), fetch=True)
-    if not res_m or not any(r.id == int(res_m[0]) for r in itx.user.roles):
-        return await itx.followup.send("❌ Permesso negato. Devi essere un Meccanico.")
-
-    execute_query("UPDATE veicoli SET proprietario_id = %s WHERE targa = %s", (str(nuovo_proprietario.id), targa.upper()))
-    await itx.followup.send(f"📑 Il libretto del veicolo **{targa.upper()}** è stato aggiornato. Nuovo proprietario: {nuovo_proprietario.mention}")
-@bot.tree.command(name="fattura", description="Emetti una fattura a un cittadino")
-async def fattura(itx: discord.Interaction, utente: discord.Member, importo: int, causale: str):
-    await itx.response.defer()
-    
-    # Salviamo la fattura nel DB (aggiungi la tabella 'fatture' se vuoi renderle pagabili via comando)
-    # Per ora facciamo un'emissione testuale ufficiale
-    embed = discord.Embed(title="📄 FATTURA ELETTRONICA", color=discord.Color.gold())
-    embed.add_field(name="Emittente", value=itx.user.display_name, inline=True)
-    embed.add_field(name="Destinatario", value=utente.display_name, inline=True)
-    embed.add_field(name="Importo", value=f"${importo}", inline=False)
-    embed.add_field(name="Causale", value=causale, inline=False)
-    embed.set_footer(text="Pagabile presso la banca o via comando /paga-fattura")
-    
-    await itx.followup.send(content=f"{utente.mention}, hai ricevuto una nuova fattura!", embed=embed)
-@bot.tree.command(name="documenti", description="Mostra i tuoi documenti a un altro cittadino")
-async def documenti(itx: discord.Interaction, utente: discord.Member):
-    await itx.response.defer()
-    
-    res = execute_query("SELECT lavoro FROM utenti WHERE discord_id = %s", (str(itx.user.id),), fetch=True)
-    lavoro = res[0] if res else "Civile"
-    
-    embed = discord.Embed(title="🪪 DOCUMENTO D'IDENTITÀ", color=discord.Color.dark_blue())
-    embed.add_field(name="Nome", value=itx.user.display_name, inline=True)
-    embed.add_field(name="Professione", value=lavoro, inline=True)
-    embed.set_thumbnail(url=itx.user.display_avatar.url)
-    
-    await itx.followup.send(f"{utente.mention}, {itx.user.mention} ti ha mostrato i documenti.", embed=embed)
-
-@bot.tree.command(name="bacio", description="Manda un bacio a qualcuno")
-async def bacio(itx: discord.Interaction, utente: discord.Member):
-    await itx.response.send_message(f"💋 {itx.user.mention} ha dato un bacio a {utente.mention}!")
-
-@bot.tree.command(name="anonimo", description="Invia un messaggio nel Deep Web")
-async def anonimo(itx: discord.Interaction, messaggio: str):
-    # Messaggio che non mostra chi lo ha inviato nel canale pubblico
-    await itx.response.send_message("Messaggio inviato nell'ombra...", ephemeral=True)
-    await itx.channel.send(f"👤 **[ANONIMO]**: {messaggio}")
-
-if __name__ == "__main__":
-    # Avvia il server Flask in un thread separato
-
-    bot.run(TOKEN)
-
+bot.run(TOKEN)
