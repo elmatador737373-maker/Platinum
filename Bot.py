@@ -4,6 +4,24 @@ from discord.ext import commands
 import os
 import psycopg2
 import asyncio
+from flask import Flask
+from threading import Thread
+
+# Inizializzazione Flask
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Bot is alive!"
+
+def run():
+    # Il server ascolta sulla porta 8080 (standard per Replit/Render)
+    app.run(host='0.0.0.0', port=8080)
+
+def keep_alive():
+    """Avvia il server in un thread separato per non bloccare il bot"""
+    t = Thread(target=run)
+    t.start()
 
 # --- CONFIGURAZIONE VARIABILI D'AMBIENTE ---
 TOKEN = os.getenv("TOKEN")
@@ -219,4 +237,7 @@ async def cucina(interaction: discord.Interaction, piatto: str):
     view = InterazioneCucinaRealistica(piatto=piatto, info=MENU_DATI[piatto], user_id=interaction.user.id)
     await interaction.response.send_message(embed=view.crea_embed("Chef, ai fornelli!"), view=view)
 
-bot.run(TOKEN)
+if __name__ == "__main__":
+    keep_alive()  # <--- Avvia il server web
+    bot.run(TOKEN) # <--- Avvia il bot Discord
+
