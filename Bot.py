@@ -1,191 +1,222 @@
 import discord
-from discord import app_commands, ui
+from discord import app_commands
 from discord.ext import commands
-import psycopg2
 import os
-import random
-import string
+import psycopg2
+import asyncio
 
+# --- CONFIGURAZIONE VARIABILI D'AMBIENTE ---
 TOKEN = os.getenv("DISCORD_TOKEN")
 DB_URL = os.getenv("DATABASE_URL")
 
-def db_execute(query, params=None, fetch=False):
-    with psycopg2.connect(DB_URL) as conn:
-        with conn.cursor() as cur:
-            cur.execute(query, params)
-            if fetch: return cur.fetchall()
-            conn.commit()
+# --- FUNZIONE CONNESSIONE DB ---
+def get_db_connection():
+    return psycopg2.connect(DB_URL)
 
-class RPBot(commands.Bot):
+class MyBot(commands.Bot):
     def __init__(self):
-        super().__init__(command_prefix="!", intents=discord.Intents.all())
+        intents = discord.Intents.all()
+        super().__init__(command_prefix="!", intents=intents)
+
     async def setup_hook(self):
+        # 1. Registra la view persistente (usa i custom_id per ricollegarsi)
+        self.add_view(InterazioneCucinaRealistica())
+        
+        # 2. Sincronizza i comandi slash con Discord
         await self.tree.sync()
+        
+        print(f"✅ Sistema pronto: Comandi sincronizzati e View persistenti caricate per {self.user}")
 
-bot = RPBot()
+# Istanza del bot
+bot = MyBot()
 
-# --- ⚙️ SETUP & CONFIG ---
-@bot.tree.command(name="setup_server")
-@app_commands.checks.has_permissions(administrator=True)
-async def setup(it: discord.Interaction, cittadino: discord.Role, polizia: discord.Role, meccanico: discord.Role, staff: discord.Role):
-    db_execute("INSERT INTO config_server VALUES (%s,%s,%s,%s,%s) ON CONFLICT (guild_id) DO UPDATE SET ruolo_polizia=EXCLUDED.ruolo_polizia, ruolo_cittadino=EXCLUDED.ruolo_cittadino, ruolo_meccanico=EXCLUDED.ruolo_meccanico, ruolo_staff=EXCLUDED.ruolo_staff", (it.guild.id, polizia.id, cittadino.id, meccanico.id, staff.id))
-    await it.response.send_message("✅ Server Configurato!")
-
-# --- 📱 TELEFONO & BANCA ---
-class BankModal(ui.Modal, title="Operazione Bancaria"):
-    amount = ui.TextInput(label="Cifra")
-    def __init__(self, mode):
-        super().__init__()
-        self.mode = mode
-    async def on_submit(self, it: discord.Interaction):
-        val = int(self.amount.value)
-        if self.mode == "dep":
-            db_execute("UPDATE utenti SET contanti=contanti-%s, banca=banca+%s WHERE user_id=%s", (val, val, it.user.id))
-        else:
-            db_execute("UPDATE utenti SET banca=banca-%s, contanti=contanti+%s WHERE user_id=%s", (val, val, it.user.id))
-        await it.response.send_message(f"✅ Operazione di {val}€ completata!", ephemeral=True)
-
-class PhoneView(ui.View):
-    @ui.button(label="Deposita", style=discord.ButtonStyle.green)
-    async def dep(self, it, b): await it.response.send_modal(BankModal("dep"))
-    @ui.button(label="Preleva", style=discord.ButtonStyle.red)
-    async def pre(self, it, b): await it.response.send_modal(BankModal("pre"))
-
-@bot.tree.command(name="telefono")
-async def telefono(it: discord.Interaction):
-    res = db_execute("SELECT numero_tel FROM utenti WHERE user_id=%s", (it.user.id,), fetch=True)
-    num = res[0][0] if res else "".join(random.choices(string.digits, k=7))
-    if not res: db_execute("INSERT INTO utenti (user_id, numero_tel) VALUES (%s,%s)", (it.user.id, num))
-    await it.response.send_message(f"📱 iFruit | Numero: {num}", view=PhoneView(), ephemeral=True)
-
-@bot.tree.command(name="portafoglio")
-async def portafoglio(it: discord.Interaction):
-    res = db_execute("SELECT contanti, banca, punti_patente FROM utenti WHERE user_id=%s", (it.user.id,), fetch=True)
-    await it.response.send_message(f"👛 Contanti: {res[0][0]}€ | 🏦 Banca: {res[0][1]}€ | 🚗 Punti: {res[0][2]}/20")
-
-# --- 🎒 INVENTARIO & SHOP ---
-@bot.tree.command(name="crea_item_shop")
-async def c_item(it: discord.Interaction, nome: str, prezzo: int, ruolo: discord.Role = None):
-    rid = ruolo.id if ruolo else None
-    db_execute("INSERT INTO shop_items VALUES (%s,%s,%s)", (nome, prezzo, rid))
-    await it.response.send_message(f"✅ Item {nome} aggiunto.")
-
-@bot.tree.command(name="compra")
-async def compra(it: discord.Interaction, ricerca: str):
-    res = db_execute("SELECT nome, prezzo FROM shop_items WHERE nome ILIKE %s", (f"%{ricerca}%",), fetch=True)
-    if not res: return await it.response.send_message("❌ Nessun match.")
-    if len(res) > 1:
-        options = [discord.SelectOption(label=f"{n} ({p}€)", value=n) for n, p in res]
-        view = ui.View()
-        select = ui.Select(placeholder="Scegli l'item esatto...", options=options)
-        async def callback(i: discord.Interaction):
-            n_sel = select.values[0]
-            prezzo = next(p for n, p in res if n == n_sel)
-            db_execute("UPDATE utenti SET contanti=contanti-%s WHERE user_id=%s", (prezzo, i.user.id))
-            db_execute("INSERT INTO inventario (user_id, item_nome) VALUES (%s,%s)", (i.user.id, n_sel))
-            await i.response.send_message(f"🛒 Acquistato {n_sel}!")
-        select.callback = callback
-        view.add_item(select)
-        await it.response.send_message("Troppe corrispondenze, seleziona:", view=view, ephemeral=True)
-    else:
-        n, p = res[0]
-        db_execute("UPDATE utenti SET contanti=contanti-%s WHERE user_id=%s", (p, it.user.id))
-        db_execute("INSERT INTO inventario (user_id, item_nome) VALUES (%s,%s)", (it.user.id, n))
-        await it.response.send_message(f"🛒 Acquistato {n}!")
-
-@bot.tree.command(name="inventario")
-async def inv(it: discord.Interaction):
-    res = db_execute("SELECT item_nome FROM inventario WHERE user_id=%s", (it.user.id,), fetch=True)
-    await it.response.send_message(f"🎒 Inventario:\n" + "\n".join([f"- {r[0]}" for r in res]) if res else "Vuoto.")
-
-@bot.tree.command(name="usa")
-async def usa(it: discord.Interaction, item: str):
-    res = db_execute("SELECT id FROM inventario WHERE user_id=%s AND item_nome=%s LIMIT 1", (it.user.id, item), fetch=True)
-    if not res: return await it.response.send_message("❌ Non hai questo item.")
-    db_execute("DELETE FROM inventario WHERE id=%s", (res[0][0],))
-    await it.response.send_message(f"✨ Hai usato {item}.")
-
-# --- 🏢 FAZIONI & DEPOSITO ---
-@bot.tree.command(name="crea_fazione")
-async def c_faz(it: discord.Interaction, nome: str, ruolo: discord.Role):
-    db_execute("INSERT INTO fazioni (nome, ruolo_id) VALUES (%s,%s)", (nome, ruolo.id))
-    await it.response.send_message(f"🏢 Fazione {nome} creata per {ruolo.name}.")
-
-@bot.tree.command(name="deposito")
-async def deposito(it: discord.Interaction):
-    faz_disponibili = db_execute("SELECT nome, ruolo_id FROM fazioni", fetch=True)
-    mie_faz = [f[0] for f in faz_disponibili if it.user.get_role(f[1])]
-    if not mie_faz: return await it.response.send_message("❌ Non appartieni a nessuna fazione.")
+# --- HELPER: LOGICA CONSUMO ---
+async def consuma_item(interaction: discord.Interaction, item_nome: str, tipo_richiesto: str):
+    conn = get_db_connection()
+    cur = conn.cursor()
     
-    view = ui.View()
-    select = ui.Select(placeholder="Scegli il deposito da aprire", options=[discord.SelectOption(label=n) for n in mie_faz])
-    async def callback(i: discord.Interaction):
-        f_sel = select.values[0]
-        res = db_execute("SELECT fondo_cassa FROM fazioni WHERE nome=%s", (f_sel,), fetch=True)
-        items = db_execute("SELECT item_nome FROM magazzino_fazione WHERE fazione_nome=%s", (f_sel,), fetch=True)
-        msg = f"📦 **Deposito {f_sel}**\n💰 Fondo: {res[0][0]}€\n🎒 Items: {', '.join([r[0] for r in items]) if items else 'Nessuno'}"
-        await i.response.send_message(msg, ephemeral=True)
-    select.callback = callback
-    view.add_item(select)
-    await it.response.send_message("Seleziona fazione:", view=view, ephemeral=True)
+    # Controllo se l'utente esiste nel DB (per evitare errori di stats)
+    cur.execute("INSERT INTO users (user_id) VALUES (%s) ON CONFLICT (user_id) DO NOTHING", (str(interaction.user.id),))
+    
+    # Verifica possesso e tipo
+    cur.execute("""
+        SELECT i.quantity, it.tipo, it.valore_ripristino 
+        FROM inventory i JOIN items it ON i.item_name = it.name 
+        WHERE i.user_id = %s AND i.item_name = %s AND it.tipo = %s
+    """, (str(interaction.user.id), item_nome, tipo_richiesto))
+    res = cur.fetchone()
 
-# --- 🚗 MECCANICO & VEICOLI ---
-@bot.tree.command(name="registra_veicolo")
-async def reg_v(it: discord.Interaction, utente: discord.Member, modello: str):
-    targa = "".join(random.choices(string.ascii_uppercase + string.digits, k=7))
-    db_execute("INSERT INTO veicoli VALUES (%s,%s,%s)", (targa, utente.id, modello))
-    chiave = f":chiavi: | Chiavi ({modello}) [{targa}]"
-    db_execute("INSERT INTO inventario (user_id, item_nome) VALUES (%s,%s)", (utente.id, chiave))
-    await it.response.send_message(f"🚗 {modello} registrato! Targa: {targa}")
+    if not res:
+        cur.close(); conn.close()
+        return await interaction.response.send_message(f"❌ Non hai **{item_nome}** nel tuo inventario o non è l'azione corretta!", ephemeral=True)
 
-@bot.tree.command(name="guida_veicolo")
-async def guida(it: discord.Interaction):
-    res = db_execute("SELECT modello, targa FROM veicoli WHERE owner_id=%s", (it.user.id,), fetch=True)
-    if not res: return await it.response.send_message("❌ Non hai veicoli.")
-    view = ui.View()
-    select = ui.Select(options=[discord.SelectOption(label=f"{m} [{t}]", value=t) for m, t in res])
-    select.callback = lambda i: i.response.send_message(f"🚘 Hai messo in moto il veicolo {select.values[0]}")
-    view.add_item(select)
-    await it.response.send_message("Scegli veicolo da guidare:", view=view, ephemeral=True)
+    quantita, tipo, valore = res
+    
+    # Logica Stats
+    if tipo == "cibo":
+        query_stats = "UPDATE users SET fame = LEAST(fame + %s, 100) WHERE user_id = %s"
+        azione = "mangiato"
+    elif tipo == "bevanda":
+        query_stats = "UPDATE users SET sete = LEAST(sete + %s, 100) WHERE user_id = %s"
+        azione = "bevuto"
+    elif tipo == "fumo":
+        query_stats = "UPDATE users SET stress = GREATEST(stress - %s, 0) WHERE user_id = %s"
+        azione = "fumato"
 
-# --- 👮 POLIZIA ---
-@bot.tree.command(name="ammanetta")
-async def ammanetta(it, utente: discord.Member): await it.response.send_message(f"👮 {it.user.name} ha ammanettato {utente.mention}.")
-@bot.tree.command(name="smanetta")
-async def smanetta(it, utente: discord.Member): await it.response.send_message(f"🔓 {it.user.name} ha smanettato {utente.mention}.")
+    cur.execute(query_stats, (valore, str(interaction.user.id)))
+    
+    # Rimozione Inventario
+    if quantita > 1:
+        cur.execute("UPDATE inventory SET quantity = quantity - 1 WHERE user_id = %s AND item_name = %s", (str(interaction.user.id), item_nome))
+    else:
+        cur.execute("DELETE FROM inventory WHERE user_id = %s AND item_name = %s", (str(interaction.user.id), item_nome))
+    
+    conn.commit()
+    cur.close(); conn.close()
+    await interaction.response.send_message(f"✅ Hai {azione} **{item_nome}**!")
 
-@bot.tree.command(name="ricerca_cittadino")
-async def ric_c(it, utente: discord.Member):
-    res = db_execute("SELECT documento, punti_patente, patente FROM utenti WHERE user_id=%s", (utente.id,), fetch=True)
-    await it.response.send_message(f"🔍 Dati {utente.name}:\n🪪 Doc: {res[0][0]}\n📉 Punti: {res[0][1]}\n🚗 Patente: {res[0][2]}")
+# --- AUTOCOMPLETE ---
+async def get_filtered_items(interaction: discord.Interaction, current: str, tipo: str):
+    conn = get_db_connection(); cur = conn.cursor()
+    cur.execute("""
+        SELECT i.item_name FROM inventory i 
+        JOIN items it ON i.item_name = it.name 
+        WHERE i.user_id = %s AND it.tipo = %s AND i.item_name ILIKE %s
+    """, (str(interaction.user.id), tipo, f"%{current}%"))
+    items = cur.fetchall()
+    cur.close(); conn.close()
+    return [app_commands.Choice(name=item[0], value=item[0]) for item in items][:25]
 
-# --- 🪪 DOCUMENTI ---
-@bot.tree.command(name="crea_documento")
-async def c_doc(it: discord.Interaction, nome: str, cognome: str):
-    db_execute("UPDATE utenti SET documento=%s, patente='Valida', punti_patente=20 WHERE user_id=%s", (f"{nome} {cognome}", it.user.id))
-    await it.response.send_message("🪪 Documento e Patente creati!")
+# --- COMANDI UTENTE ---
 
-# --- 🛠️ STAFF ---
-@bot.tree.command(name="staff_aggiungi_item")
-async def s_a_i(it, utente: discord.Member, item: str):
-    db_execute("INSERT INTO inventario (user_id, item_nome) VALUES (%s,%s)", (utente.id, item))
-    await it.response.send_message(f"✅ Staff ha dato {item} a {utente.name}")
+@bot.tree.command(name="mangia", description="Mangia un alimento")
+@app_commands.autocomplete(item=lambda inter, curr: get_filtered_items(inter, curr, 'cibo'))
+async def mangia(interaction: discord.Interaction, item: str):
+    await consuma_item(interaction, item, "cibo")
 
-@bot.tree.command(name="staff_aggiungi_soldi")
-async def s_a_s(it, utente: discord.Member, soldi: int):
-    db_execute("UPDATE utenti SET contanti=contanti+%s WHERE user_id=%s", (soldi, utente.id))
-    await it.response.send_message(f"✅ Staff ha dato {soldi}€ a {utente.name}")
+@bot.tree.command(name="bevi", description="Bevi una bevanda")
+@app_commands.autocomplete(item=lambda inter, curr: get_filtered_items(inter, curr, 'bevanda'))
+async def bevi(interaction: discord.Interaction, item: str):
+    await consuma_item(interaction, item, "bevanda")
 
-# --- 💸 SCAMBI & FATTURE ---
-@bot.tree.command(name="dai_soldi")
-async def dai_s(it, utente: discord.Member, soldi: int):
-    db_execute("UPDATE utenti SET contanti=contanti-%s WHERE user_id=%s", (soldi, it.user.id))
-    db_execute("UPDATE utenti SET contanti=contanti+%s WHERE user_id=%s", (soldi, utente.id))
-    await it.response.send_message(f"💸 Hai dato {soldi}€ a {utente.name}")
+@bot.tree.command(name="fuma", description="Fuma per rilassarti")
+@app_commands.autocomplete(item=lambda inter, curr: get_filtered_items(inter, curr, 'fumo'))
+async def fuma(interaction: discord.Interaction, item: str):
+    await consuma_item(interaction, item, "fumo")
 
-@bot.tree.command(name="fattura")
-async def fat(it, utente: discord.Member, euro: int, causale: str):
-    db_execute("INSERT INTO fatture (emittente_id, destinatario_id, importo, causale) VALUES (%s,%s,%s,%s)", (it.user.id, utente.id, euro, causale))
-    await it.response.send_message(f"📑 Fattura inviata a {utente.name}")
+@bot.tree.command(name="status", description="Vedi Fame, Sete e Stress")
+async def status(interaction: discord.Interaction):
+    conn = get_db_connection(); cur = conn.cursor()
+    cur.execute("SELECT fame, sete, stress FROM users WHERE user_id = %s", (str(interaction.user.id),))
+    res = cur.fetchone()
+    cur.close(); conn.close()
+    
+    if not res: return await interaction.response.send_message("❌ Status non disponibile. Inizia a consumare qualcosa!", ephemeral=True)
+    
+    fame, sete, stress = res
+    def make_bar(n): return "🟩" * (n // 10) + "⬜" * (10 - (n // 10))
+
+    embed = discord.Embed(title=f"📊 Status: {interaction.user.name}", color=discord.Color.blue())
+    embed.add_field(name=f"🍔 Fame: {fame}%", value=make_bar(fame), inline=False)
+    embed.add_field(name=f"🥤 Sete: {sete}%", value=make_bar(sete), inline=False)
+    embed.add_field(name=f"🚬 Stress: {stress}%", value=make_bar(100-stress), inline=False) # Invertito per coerenza visiva
+    await interaction.response.send_message(embed=embed)
+
+# --- COMANDO STAFF ---
+
+@bot.tree.command(name="crea_item_shop", description="STAFF - Aggiungi item allo shop")
+@app_commands.choices(tipo=[
+    app_commands.Choice(name="Cibo", value="cibo"),
+    app_commands.Choice(name="Bevanda", value="bevanda"),
+    app_commands.Choice(name="Fumo", value="fumo"),
+    app_commands.Choice(name="Normale", value="normale")
+])
+async def crea_item_shop(interaction: discord.Interaction, nome: str, descrizione: str, prezzo: int, tipo: str, valore: int = 20):
+    # Inserire qui il controllo ruoli staff se necessario
+    conn = get_db_connection(); cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO items (name, description, price, tipo, valore_ripristino) 
+        VALUES (%s, %s, %s, %s, %s) 
+        ON CONFLICT (name) DO UPDATE SET tipo=EXCLUDED.tipo, valore_ripristino=EXCLUDED.valore_ripristino, price=EXCLUDED.price
+    """, (nome, descrizione, prezzo, tipo, valore))
+    conn.commit(); cur.close(); conn.close()
+    await interaction.response.send_message(f"✅ Item **{nome}** ({tipo}) registrato con valore {valore}.")
+# --- VIEW PERSISTENTE ---
+class InterazioneCucinaRealistica(discord.ui.View):
+    def __init__(self, piatto=None, info=None, user_id=None):
+        # Timeout=None rende la view persistente
+        super().__init__(timeout=None)
+        self.piatto = piatto
+        self.info = info
+        self.user_id = user_id
+        self.strumento_attivo = None
+        self.stato_cottura = 0
+        self.cliccato_cottura = False
+
+    def crea_embed(self, messaggio):
+        color = discord.Color.green() if "✅" in messaggio else discord.Color.blue()
+        embed = discord.Embed(title=f"👨‍🍳 Cucina: {self.piatto}", description=messaggio, color=color)
+        embed.add_field(name="🛠️ Strumento", value=f"`{self.strumento_attivo or 'Mani Vuote'}`")
+        
+        fasi = ["🔪 Prep", "🔥 Cottura", "🍽️ Fine"]
+        bar = " ".join([f"**{f}** {'✅' if self.stato_cottura > i else '⚪'}" for i, f in enumerate(fasi)])
+        embed.add_field(name="Avanzamento", value=bar, inline=False)
+        return embed
+
+    @discord.ui.select(
+        placeholder="Scegli lo strumento...",
+        custom_id="cucina:select", # ID univoco per persistenza
+        options=[
+            discord.SelectOption(label="Tagliere", emoji="🔪"),
+            discord.SelectOption(label="Pentola", emoji="🍲"),
+            discord.SelectOption(label="Forno a Legna", emoji="🔥"),
+            discord.SelectOption(label="Frusta/Sbattitore", emoji="🥣"),
+            discord.SelectOption(label="Padella", emoji="🍳")
+        ]
+    )
+    async def select_strumento(self, interaction: discord.Interaction, select: discord.ui.Select):
+        if self.user_id and interaction.user.id != self.user_id:
+            return await interaction.response.send_message("❌ Non è la tua postazione!", ephemeral=True)
+        
+        self.strumento_attivo = select.values[0]
+        await interaction.response.edit_message(embed=self.crea_embed(f"Hai preso: **{self.strumento_attivo}**."))
+
+    @discord.ui.button(label="1. Prepara", style=discord.ButtonStyle.secondary, custom_id="cucina:prepara")
+    async def prepara(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.strumento_attivo != "Tagliere":
+            return await interaction.response.send_message("❌ Usa il Tagliere!", ephemeral=True)
+        
+        self.stato_cottura = 1
+        await interaction.response.edit_message(embed=self.crea_embed("Base pronta! Ora usa lo strumento finale."), view=self)
+
+    @discord.ui.button(label="2. Completa", style=discord.ButtonStyle.danger, custom_id="cucina:cuoci")
+    async def cuoci(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Logica di controllo strumento necessario (semplificata per brevità)
+        if self.stato_cottura < 1:
+            return await interaction.response.send_message("❌ Prepara prima gli ingredienti!", ephemeral=True)
+        
+        self.cliccato_cottura = True
+        self.stato_cottura = 2
+        await interaction.response.edit_message(embed=self.crea_embed("⏳ In lavorazione..."), view=None)
+        
+        # Simulazione cottura e salvataggio
+        await asyncio.sleep(5) 
+        
+        conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+        cur = conn.cursor()
+        cur.execute("INSERT INTO inventory (user_id, item_name, quantity) VALUES (%s, %s, 1) ON CONFLICT (user_id, item_name) DO UPDATE SET quantity = inventory.quantity + 1", (str(interaction.user.id), self.piatto))
+        conn.commit(); cur.close(); conn.close()
+        
+        await interaction.followup.send(f"✅ {interaction.user.mention}, il tuo **{self.piatto}** è pronto!", ephemeral=False)
+
+# --- COMANDO ---
+@bot.tree.command(name="cucina", description="Inizia a cucinare")
+async def cucina(interaction: discord.Interaction, piatto: str):
+    if piatto not in MENU_DATI:
+        return await interaction.response.send_message("❌ Piatto non valido.", ephemeral=True)
+    
+    # Crea la view specifica per questa sessione
+    view = InterazioneCucinaRealistica(piatto=piatto, info=MENU_DATI[piatto], user_id=interaction.user.id)
+    await interaction.response.send_message(embed=view.crea_embed("Chef, ai fornelli!"), view=view)
 
 bot.run(TOKEN)
