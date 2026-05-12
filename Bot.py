@@ -6,7 +6,7 @@ import psycopg2
 import asyncio
 
 # --- CONFIGURAZIONE VARIABILI D'AMBIENTE ---
-TOKEN = os.getenv("DISCORD_TOKEN")
+TOKEN = os.getenv("TOKEN")
 DB_URL = os.getenv("DATABASE_URL")
 
 # --- FUNZIONE CONNESSIONE DB ---
