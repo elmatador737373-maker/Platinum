@@ -322,13 +322,13 @@ async def revisione(interaction: discord.Interaction, targa: str, giorni: int = 
         await interaction.response.send_message(f"❌ Nessun veicolo associato alla targa `{targa_pulita}` nella tabella `public.veicoli`.", ephemeral=True)
     else:
         await interaction.response.send_message(f"✅ **Revisione Aggiornata**: Il veicolo con targa **{targa_pulita}** è stato revisionato con successo fino al `{data_scadenza}`.")
-
 # ==========================================
 # BOT TREE: BONIFICO
 # ==========================================
 @bot.tree.command(name="bonifico", description="Invia denaro dalla tua banca alla banca di un altro utente")
 @app_commands.describe(utente="L'utente che riceverà il denaro", ammontare="La quantità di denaro da inviare")
 async def bonifico(interaction: discord.Interaction, utente: discord.Member, ammontare: int):
+    # Evita il timeout dei 3 secondi di Discord
     await interaction.response.defer(ephemeral=False)
 
     if utente.id == interaction.user.id:
@@ -340,6 +340,7 @@ async def bonifico(interaction: discord.Interaction, utente: discord.Member, amm
     sender_id = str(interaction.user.id)
     receiver_id = str(utente.id)
 
+    # Assicuriamoci che il destinatario esista nella tabella users prima di inviare i soldi
     get_user_data(utente.id)
 
     conn = get_db_connection()
@@ -348,8 +349,12 @@ async def bonifico(interaction: discord.Interaction, utente: discord.Member, amm
 
     try:
         cur = conn.cursor()
+
+        # Modifica della colonna bank basata sulla tabella 'users' usando la chiave 'id'
         cur.execute("UPDATE users SET bank = bank - %s WHERE id = %s", (ammontare, sender_id))
         cur.execute("UPDATE users SET bank = bank + %s WHERE id = %s", (ammontare, receiver_id))
+
+        # Conferma definitiva dell'operazione
         conn.commit()
 
         embed = discord.Embed(
@@ -365,6 +370,7 @@ async def bonifico(interaction: discord.Interaction, utente: discord.Member, amm
         await interaction.followup.send(embed=embed)
 
     except psycopg2.errors.CheckViolation:
+        # Questo blocco scatta se l'utente viola il CHECK constraint (se bank va sotto zero)
         conn.rollback()
         await interaction.followup.send("❌ Bonifico rifiutato: Non hai abbastanza denaro sul tuo conto bancario!", ephemeral=True)
 
@@ -377,6 +383,7 @@ async def bonifico(interaction: discord.Interaction, utente: discord.Member, amm
         if conn:
             cur.close()
             conn.close()
+
 
 # ================= GESTIONE ERRORI GLOBALE =================
 
