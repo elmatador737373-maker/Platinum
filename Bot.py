@@ -400,7 +400,7 @@ async def bonifico(interaction: discord.Interaction, utente: discord.Member, amm
             conn.close()
 
         # LOGS
-        emb = discord.Embed(title="💵 LOG SCAMBIO CONTANTI", color=discord.Color.green(), timestamp=discord.utils.utcnow())
+        emb = discord.Embed(title="💵 LOG BONIFICO", color=discord.Color.green(), timestamp=discord.utils.utcnow())
         emb.add_field(name="Mittente", value=interaction.user.mention)
         emb.add_field(name="Destinatario", value=utente.mention)
         emb.add_field(name="Importo", value=f"{importo}$")
