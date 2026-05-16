@@ -323,12 +323,12 @@ async def revisione(interaction: discord.Interaction, targa: str, giorni: int = 
     else:
         await interaction.response.send_message(f"✅ **Revisione Aggiornata**: Il veicolo con targa **{targa_pulita}** è stato revisionato con successo fino al `{data_scadenza}`.")
 # ==========================================
-# BOT TREE: BONIFICO
+# BOT TREE: BONIFICO (ALLINEATO ALLA TABELLA)
 # ==========================================
 @bot.tree.command(name="bonifico", description="Invia denaro dalla tua banca alla banca di un altro utente")
 @app_commands.describe(utente="L'utente che riceverà il denaro", ammontare="La quantità di denaro da inviare")
 async def bonifico(interaction: discord.Interaction, utente: discord.Member, ammontare: int):
-    # Evita il timeout dei 3 secondi di Discord
+    # Evita il timeout di 3 secondi di Discord deferendo la risposta
     await interaction.response.defer(ephemeral=False)
 
     if utente.id == interaction.user.id:
@@ -340,7 +340,7 @@ async def bonifico(interaction: discord.Interaction, utente: discord.Member, amm
     sender_id = str(interaction.user.id)
     receiver_id = str(utente.id)
 
-    # Assicuriamoci che il destinatario esista nella tabella users prima di inviare i soldi
+    # Inizializza il destinatario nel database se non è ancora registrato
     get_user_data(utente.id)
 
     conn = get_db_connection()
@@ -349,12 +349,19 @@ async def bonifico(interaction: discord.Interaction, utente: discord.Member, amm
 
     try:
         cur = conn.cursor()
+        
+        # 1. Verifica manuale del saldo (visto che 'bank' nel tuo schema non ha un vincolo CHECK negativo)
+        cur.execute("SELECT bank FROM public.users WHERE user_id = %s;", (sender_id,))
+        mittente_data = cur.fetchone()
+        
+        if not mittente_data or mittente_data[0] < ammontare:
+            return await interaction.followup.send("❌ Bonifico rifiutato: Non hai abbastanza denaro sul tuo conto bancario!", ephemeral=True)
 
-        # Modifica della colonna bank basata sulla tabella 'users' usando la chiave 'id'
-        cur.execute("UPDATE users SET bank = bank - %s WHERE id = %s", (ammontare, sender_id))
-        cur.execute("UPDATE users SET bank = bank + %s WHERE id = %s", (ammontare, receiver_id))
-
-        # Conferma definitiva dell'operazione
+        # 2. Esecuzione dei prelievi e depositi usando esattamente le colonne 'bank' e 'user_id'
+        cur.execute("UPDATE public.users SET bank = bank - %s WHERE user_id = %s", (ammontare, sender_id))
+        cur.execute("UPDATE public.users SET bank = bank + %s WHERE user_id = %s", (ammontare, receiver_id))
+        
+        # Salva le modifiche nel database
         conn.commit()
 
         embed = discord.Embed(
@@ -365,14 +372,9 @@ async def bonifico(interaction: discord.Interaction, utente: discord.Member, amm
         embed.add_field(name="👤 Mittente", value=interaction.user.mention, inline=True)
         embed.add_field(name="👤 Destinatario", value=utente.mention, inline=True)
         embed.add_field(name="💰 Somma Inviata", value=f"**{ammontare:,}$**", inline=False)
-        embed.set_footer(text="Transazione bancaria tracciata ed eseguita")
+        embed.set_footer(text="Transazione eseguita con successo sulla tabella public.users")
         
         await interaction.followup.send(embed=embed)
-
-    except psycopg2.errors.CheckViolation:
-        # Questo blocco scatta se l'utente viola il CHECK constraint (se bank va sotto zero)
-        conn.rollback()
-        await interaction.followup.send("❌ Bonifico rifiutato: Non hai abbastanza denaro sul tuo conto bancario!", ephemeral=True)
 
     except Exception as e:
         conn.rollback()
@@ -383,7 +385,6 @@ async def bonifico(interaction: discord.Interaction, utente: discord.Member, amm
         if conn:
             cur.close()
             conn.close()
-
 
 # ================= GESTIONE ERRORI GLOBALE =================
 
