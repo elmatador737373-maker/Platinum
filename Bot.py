@@ -290,6 +290,19 @@ async def assicurazione(interaction: discord.Interaction, targa: str, giorni: in
     else:
         await interaction.response.send_message(f"✅ **Assicurazione Aggiornata**: Il veicolo con targa **{targa_pulita}** è ora assicurato fino al `{data_scadenza}`.")
 
+async def invia_log_finanziario(guild, embed):
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT setting_value FROM server_settings WHERE setting_name = 'log_finanze'")
+        res = cur.fetchone()
+        cur.close(); conn.close()
+        if res:
+            canale = guild.get_channel(int(res['setting_value']))
+            if canale: await canale.send(embed=embed)
+    except Exception as e:
+        print(f"Errore log finanziario: {e}")
+
 # ==========================================
 # BOT TREE: COMANDO REVISIONE (RUOLO SPECIFICO)
 # ==========================================
@@ -385,6 +398,20 @@ async def bonifico(interaction: discord.Interaction, utente: discord.Member, amm
         if conn:
             cur.close()
             conn.close()
+
+        # LOGS
+        emb = discord.Embed(title="💵 LOG SCAMBIO CONTANTI", color=discord.Color.green(), timestamp=discord.utils.utcnow())
+        emb.add_field(name="Mittente", value=interaction.user.mention)
+        emb.add_field(name="Destinatario", value=utente.mention)
+        emb.add_field(name="Importo", value=f"{importo}$")
+        await invia_log_finanziario(interaction.guild, emb)
+
+    except Exception as e:
+        conn.rollback()
+        print(f"[ERROR] Errore durante il pagamento: {e}")
+        await interaction.response.send_message("❌ Errore tecnico durante la transazione.", ephemeral=True)
+    finally:
+        cur.close(); conn.close()
 
 # ================= GESTIONE ERRORI GLOBALE =================
 
