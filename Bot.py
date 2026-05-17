@@ -68,9 +68,15 @@ async def on_ready():
     print(f'{"="*40}')
     print(f'🤖 LOG IN SECONDO BOT: {bot.user}')
     
-    # Avvia il loop dei finanziamenti all'avvio del bot
+    # Avvia il loop dei finanziamenti se non è già attivo
     if not controllo_finanziamenti.is_running():
         controllo_finanziamenti.start()
+        print("📊 [TASK] Controllo finanziamenti avviato!")
+        
+    # Avvia il loop di assicurazioni e revisioni (soglia 7gg + DM) se non è già attivo
+    if not controllo_scadenze_veicoli.is_running():
+        controllo_scadenze_veicoli.start()
+        print("🚘 [TASK] Controllo scadenze veicoli (Assicurazioni/Revisioni) avviato!")
     
     try:
         print("🔄 Sincronizzazione comandi slash...")
