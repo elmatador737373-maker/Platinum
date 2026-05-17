@@ -90,18 +90,100 @@ async def check_guild(interaction: discord.Interaction):
         return False
     return True
 
+from psycopg2.extras import RealDictCursor  # Assicurati di avere questo import in cima al file
+
+async def invia_log_finanziario(guild: discord.Guild, embed: discord.Embed):
+    """
+    Recupera l'ID del canale dei log finanziari dal database e invia l'embed fornito.
+    """
+    try:
+        conn = get_db_connection()
+        if not conn:
+            print("❌ [LOG FINANZE] Impossibile connettersi al database.")
+            return
+
+        # Utilizza RealDictCursor per mappare le colonne del DB come chiavi di un dizionario
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT setting_value FROM server_settings WHERE setting_name = 'log_finanze'")
+        res = cur.fetchone()
+        cur.close()
+        conn.close()
+
+        if res and res['setting_value']:
+            # Converte l'ID memorizzato nel DB in un intero e cerca il canale nel server (guild)
+            canale = guild.get_channel(int(res['setting_value']))
+            if canale: 
+                await canale.send(embed=embed)
+            else:
+                print(f"⚠️ [LOG FINANZE] Canale con ID {res['setting_value']} non trovato nel server.")
+        else:
+            print("⚠️ [LOG FINANZE] Impostazione 'log_finanze' non trovata nella tabella server_settings.")
+
+    except Exception as e:
+        print(f"❌ Errore durante l'invio del log finanziario: {e}")
 # ==========================================
 # TASK AUTOMATICO GIORNALIERO (FINANZIAMENTI)
 # ==========================================
 @tasks.loop(hours=24.0)
 async def controllo_finanziamenti():
     """Controlla ogni 24 ore i finanziamenti attivi e scala la quota dalla banca."""
-    await asyncio.to_thread(_elabora_finanziamenti_giornalieri)
+    # Eseguiamo i controlli sul DB e otteniamo la lista degli insolventi o dei log da inviare
+    risultati = await asyncio.to_thread(_elabora_finanziamenti_giornalieri)
+    
+    if not risultati:
+        return
+        
+    # Prendiamo la prima guild (server) disponibile in cui si trova il bot per cercare il canale log
+    if not bot.guilds:
+        return
+    guild = bot.guilds[0] 
+
+    # Gestione delle notifiche (Log e DM) per chi non ha pagato
+    for insolvente in risultati["insolventi"]:
+        uid = insolvente["user_id"]
+        quota = insolvente["quota"]
+        saldo = insolvente["saldo"]
+        
+        # 1. Invio Log nel canale del server (usando la tua funzione esistente)
+        embed_log = discord.Embed(
+            title="⚠️ Mancato Pagamento Finanziamento",
+            description=f"L'utente <@{uid}> non ha abbastanza fondi in banca per coprire la quota giornaliera.",
+            color=discord.Color.red(),
+            timestamp=datetime.now()
+        )
+        embed_log.add_field(name="📉 Quota Giornaliera", value=f"{quota:,.2f}€", inline=True)
+        embed_log.add_field(name="🏦 Saldo Attuale", value=f"{saldo:,.2f}€" if saldo is not None else "N/D", inline=True)
+        embed_log.set_footer(text="Sistema Ammortamento Automatico")
+        
+        await invia_log_finanziario(guild, embed_log)
+        
+        # 2. Invio notifica in DM all'utente
+        try:
+            user = await bot.fetch_user(int(uid))
+            if user:
+                embed_user = discord.Embed(
+                    title="🏦 Sollecito di Pagamento",
+                    description=f"Ciao {user.display_name}, il tuo conto bancario non dispone di fondi sufficienti per saldare la quota odierna del finanziamento.",
+                    color=discord.Color.orange(),
+                    timestamp=datetime.now()
+                )
+                embed_user.add_field(name="📉 Quota da pagare", value=f"**{quota:,.2f}€**", inline=True)
+                embed_user.add_field(name="💰 Il tuo Saldo", value=f"{saldo:,.2f}€" if saldo is not None else "0.00€", inline=True)
+                embed_user.add_field(name="⚠️ Conseguenze", value="I giorni rimanenti del tuo piano sono stati congelati. Deposita il denaro al più presto per evitare sanzioni civili o pignoramenti.", inline=False)
+                await user.send(embed=embed_user)
+        except discord.Forbidden:
+            print(f"[FINANZIAMENTI] Impossibile inviare DM a {uid} (Utente con DM chiusi).")
+        except Exception as e:
+            print(f"[FINANZIAMENTI] Errore invio DM a {uid}: {e}")
+
 
 def _elabora_finanziamenti_giornalieri():
     db = get_db_connection()
     if not db:
-        return
+        return None
+        
+    risultati_azione = {"insolventi": []}
+    
     try:
         with db.cursor() as cursor:
             cursor.execute("SELECT id, user_id, importo_giornaliero, giorni_rimanenti FROM public.finanziamenti WHERE giorni_rimanenti > 0;")
@@ -114,6 +196,7 @@ def _elabora_finanziamenti_giornalieri():
                 res = cursor.fetchone()
                 saldo_banca = res[0] if res else None
                 
+                # SE HA I SOLDI: Scala normalmente
                 if saldo_banca is not None and saldo_banca >= quota:
                     cursor.execute("UPDATE public.users SET bank = bank - %s WHERE user_id = %s;", (quota, user_id))
                     
@@ -122,13 +205,28 @@ def _elabora_finanziamenti_giornalieri():
                         cursor.execute("DELETE FROM public.finanziamenti WHERE id = %s;", (f_id,))
                     else:
                         cursor.execute("UPDATE public.finanziamenti SET giorni_rimanenti = %s WHERE id = %s;", (nuovi_giorni, f_id))
+                
+                # SE NON HA I SOLDI (O l'utente non esiste):
                 else:
-                    print(f"[FINANZIAMENTI] L'utente {user_id} non ha abbastanza fondi ({saldo_banca}€) per coprire la quota di {quota}€.")
+                    print(f"[FINANZIAMENTI] L'utente {user_id} insolvente. Fondi insufficienti ({saldo_banca}€) per la quota di {quota}€.")
+                    
+                    # OPZIONE AGGIUNTIVA (Facoltativa): Se vuoi applicare una multa automatica di ad esempio 50€ nel DB puoi decommentare qui:
+                    # cursor.execute("UPDATE public.users SET bank = bank - 50 WHERE user_id = %s;", (user_id,))
+                    
+                    # Salviamo i dettagli per inviare i log asincroni fuori dal thread
+                    risultati_azione["insolventi"].append({
+                        "user_id": user_id,
+                        "quota": quota,
+                        "saldo": saldo_banca
+                    })
+                    
             db.commit()
     except Exception as e:
-        print(f"Errore nel task finanziamenti: {e}")
+        print(f"Errore nel database task finanziamenti: {e}")
     finally:
         db.close()
+        
+    return risultati_azione
 
 @controllo_finanziamenti.before_loop
 async def before_controllo_finanziamenti():
