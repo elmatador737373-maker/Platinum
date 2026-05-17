@@ -174,6 +174,147 @@ async def mostra_patente(interaction: discord.Interaction):
 
     await interaction.response.send_message(embed=embed)
 
+import discord
+from discord import app_commands
+import asyncio
+from datetime import datetime
+
+# ==========================================
+# VIEW: PULSANTE DI FIRMA PER IL FINANZIAMENTO
+# ==========================================
+class FirmaFinanziamentoView(discord.ui.View):
+    def __init__(self, beneficiario: discord.Member, staffer: discord.User | discord.Member, prezzo_totale: float, durata_giorni: int, quota_giornaliera: float, descrizione_completa: str, tipo_nome: str, motivo: str):
+        super().__init__(timeout=300) # Il pulsante scade dopo 5 minuti
+        self.beneficiario = beneficiario
+        self.staffer = staffer
+        self.prezzo_totale = prezzo_totale
+        self.durata_giorni = durata_giorni
+        self.quota_giornaliera = quota_giornaliera
+        self.descrizione_completa = descrizione_completa
+        self.tipo_nome = tipo_nome
+        self.motivo = motivo
+
+    @discord.ui.button(label="Firma Finanziamento", style=discord.ButtonStyle.success, emoji="✍️")
+    async def firma_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Controllo di sicurezza: solo chi riceve il finanziamento può firmare
+        if interaction.user.id != self.beneficiario.id:
+            return await interaction.response.send_message(
+                f"❌ Solo {self.beneficiario.mention} può firmare questo contratto.", 
+                ephemeral=True
+            )
+
+        # Connessione al database ed inserimento (avviene SOLO alla firma)
+        conn = get_db_connection()
+        if not conn:
+            return await interaction.response.send_message("❌ Errore tecnico di connessione al database.", ephemeral=True)
+
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """INSERT INTO public.finanziamenti (user_id, importo_giornaliero, giorni_rimanenti, descrizione) 
+                       VALUES (%s, %s, %s, %s);""",
+                    (str(self.beneficiario.id), self.quota_giornaliera, self.durata_giorni, self.descrizione_completa)
+                )
+            conn.commit()
+        except Exception as e:
+            print(f"Errore DB: {e}")
+            return await interaction.response.send_message("❌ Errore durante il salvataggio nei sistemi bancari.", ephemeral=True)
+        finally:
+            conn.close()
+
+        # Disabilita il pulsante dopo la firma per evitare doppi clic
+        self.clear_items()
+
+        # Crea l'embed di conferma definitiva
+        embed_confermato = discord.Embed(
+            title="🏦 Finanziamento Attivato & Firmato",
+            description=f"Il contratto è stato firmato digitalmente da {self.beneficiario.mention} ed è ora operativo.",
+            color=discord.Color.green(), # Cambia in verde a conferma avvenuta
+            timestamp=datetime.now()
+        )
+        embed_confermato.add_field(name="👤 Beneficiario", value=self.beneficiario.mention, inline=True)
+        embed_confermato.add_field(name="📋 Tipologia", value=self.tipo_nome, inline=True)
+        embed_confermato.add_field(name="📝 Causale/Motivo", value=self.motivo, inline=False)
+        embed_confermato.add_field(name="💰 Importo Totale", value=f"{self.prezzo_totale:,.2f}€", inline=True)
+        embed_confermato.add_field(name="📅 Durata Piano", value=f"{self.durata_giorni} giorni", inline=True)
+        embed_confermato.add_field(name="📉 Scalo Giornaliero", value=f"**{self.quota_giornaliera}€** / giorno", inline=False)
+        embed_confermato.set_footer(text=f"Approvato da: {self.staffer.display_name} | Firmato il")
+
+        # Aggiorna il messaggio originale rimuovendo il pulsante e cambiando l'embed
+        await interaction.response.edit_message(embed=embed_confermato, view=self)
+
+    async def on_timeout(self):
+        # Se nessuno firma entro 5 minuti, rimuove il pulsante per evitare bug
+        self.clear_items()
+        # Nota: Qui potresti anche modificare il messaggio dicendo "Contratto scaduto", 
+        # ma serve il messaggio originale. Gestiamo la pulizia dei pulsanti in sicurezza.
+
+
+# ==========================================
+# BOT TREE: CREA FINANZIAMENTO (CON PULSANTE)
+# ==========================================
+@bot.tree.command(name="crea_finanziamento", description="Attiva un piano di ammortamento giornaliero su un utente (Richiede Firma)")
+@app_commands.describe(
+    utente="L'utente a cui intestare il finanziamento",
+    tipo_finanziamento="La tipologia di finanziamento da attivare",
+    prezzo_totale="L'ammontare totale del finanziamento",
+    durata_giorni="In quanti giorni (prelievi) deve essere estinto",
+    motivo="Dettagli aggiuntivi o causale specifica"
+)
+@app_commands.choices(tipo_finanziamento=[
+    app_commands.Choice(name="🚗 Veicolo / Autovettura", value="Finanziamento Veicolo"),
+    app_commands.Choice(name="🏠 Casa / Proprietà", value="Finanziamento Immobiliare"),
+    app_commands.Choice(name="💼 Aziendale / Business", value="Finanziamento Aziendale"),
+    app_commands.Choice(name="💰 Prestito Personale", value="Prestito Personale")
+])
+async def crea_finanziamento(
+    interaction: discord.Interaction, 
+    utente: discord.Member, 
+    tipo_finanziamento: app_commands.Choice[str], 
+    prezzo_totale: float, 
+    durata_giorni: int, 
+    motivo: str = "Nessun dettaglio aggiuntivo"
+):
+    if durata_giorni <= 0:
+        return await interaction.response.send_message("❌ La durata del finanziamento deve essere di almeno 1 giorno.", ephemeral=True)
+    if prezzo_totale <= 0:
+        return await interaction.response.send_message("❌ L'importo totale deve essere maggiore di 0€.", ephemeral=True)
+
+    quota_giornaliera = round(prezzo_totale / durata_giorni, 2)
+    descrizione_completa = f"[{tipo_finanziamento.name}] {motivo}"
+
+    # Creazione dell'Embed di PROPOSTA (In attesa di firma)
+    embed_proposta = discord.Embed(
+        title="📝 Proposta di Finanziamento in Attesa di Firma",
+        description=f"{utente.mention}, è stato generato un contratto a tuo nome. Clicca sul pulsante sottostante per accettare e **firmare il piano di ammortamento**.",
+        color=discord.Color.gold(),
+        timestamp=datetime.now()
+    )
+    
+    embed_proposta.add_field(name="👤 Beneficiario", value=utente.mention, inline=True)
+    embed_proposta.add_field(name="📋 Tipologia", value=tipo_finanziamento.name, inline=True)
+    embed_proposta.add_field(name="📝 Causale/Motivo", value=motivo, inline=False)
+    
+    embed_proposta.add_field(name="💰 Importo Totale", value=f"{prezzo_totale:,.2f}€", inline=True)
+    embed_proposta.add_field(name="📅 Durata Piano", value=f"{durata_giorni} giorni", inline=True)
+    embed_proposta.add_field(name="📉 Scalo Giornaliero", value=f"**{quota_giornaliera}€** / giorno", inline=False)
+    
+    embed_proposta.set_footer(text=f"Proposto da: {interaction.user.display_name} | In attesa di firma...")
+
+    # Inizializza la View con il pulsante passando tutti i dati necessari per il DB
+    view = FirmaFinanziamentoView(
+        beneficiario=utente,
+        staffer=interaction.user,
+        prezzo_totale=prezzo_totale,
+        durata_giorni=durata_giorni,
+        quota_giornaliera=quota_giornaliera,
+        descrizione_completa=descrizione_completa,
+        tipo_nome=tipo_finanziamento.name,
+        motivo=motivo
+    )
+
+    # Invia il messaggio pubblico con l'embed e il bottone
+    await interaction.response.send_message(content=utente.mention, embed=embed_proposta, view=view)
 # ==========================================
 # BOT TREE: STATO FINANZIAMENTO (PERSONALE)
 # ==========================================
@@ -196,66 +337,57 @@ async def stato_finanziamento(interaction: discord.Interaction):
     conn.close()
 
     if not finanziamenti:
-        return await interaction.response.send_message("ℹ️ Non hai nessun finanziamento o piano di ammortamento attivo a tuo nome.", ephemeral=True)
+        # Anche l'avviso di nessun finanziamento ora usa un Embed pulito ed elegante
+        embed_vuoto = discord.Embed(
+            title="🏦 I tuoi Finanziamenti",
+            description="ℹ️ Non hai nessun finanziamento o piano di ammortamento attivo a tuo nome.",
+            color=discord.Color.blue(),
+            timestamp=datetime.now()
+        )
+        embed_vuoto.set_footer(text=f"Richiesto da: {interaction.user.display_name}")
+        return await interaction.response.send_message(embed=embed_vuoto, ephemeral=True)
 
+    # Inizializzazione dell'Embed principale (Stile dorato coerente con la proposta)
     embed = discord.Embed(
-        title="🏦 I tuoi Finanziamenti Attivi",
+        title="🏦 Linee di Credito & Finanziamenti Attivi",
+        description=f"Ecco il riepilogo della tua situazione finanziaria corrente, {interaction.user.mention}.",
         color=discord.Color.gold(),
         timestamp=datetime.now()
     )
 
+    totale_debito_complessivo = 0.0
+
     for idx, f in enumerate(finanziamenti, 1):
         quota, giorni, desc = f
         totale_residuo = round(quota * giorni, 2)
+        totale_debito_complessivo += totale_residuo
+
+        # Separazione pulita dei dati in perfetto stile tabella/lista
+        valore_field = (
+            f"📉 **Quota Giornaliera:** {quota:,.2f}€ / giorno\n"
+            f"📅 **Giorni Rimanenti:** {giorni} giorni\n"
+            f"💰 **Debito Residuo:** **{totale_residuo:,.2f}€**\n"
+            f"───────────────"
+        )
+
         embed.add_field(
-            name=f"📋 Finanziamento #{idx}: {desc}",
-            value=f"➡️ **Quota Giornaliera:** {quota}€\n"
-                  f"📅 **Giorni Rimanenti:** {giorni}\n"
-                  f"💰 **Debito Residuo:** {totale_residuo}€",
+            name=f"📊 #{idx} | {desc}",
+            value=valore_field,
+            inline=False
+        )
+
+    # Campo finale riassuntivo se l'utente ha più di un finanziamento attivo
+    if len(finanziamenti) > 1:
+        embed.add_field(
+            name="📊 Riepilogo Totale",
+            value=f"💳 **Piani Attivi:** {len(finanziamenti)}\n"
+                  f"🟥 **Debito Totale Accumulato:** **{totale_debito_complessivo:,.2f}€**",
             inline=False
         )
 
     embed.set_footer(text=f"Richiesto da: {interaction.user.display_name}")
+    
     await interaction.response.send_message(embed=embed)
-
-# ==========================================
-# BOT TREE: CREA FINANZIAMENTO (LIBERO)
-# ==========================================
-@bot.tree.command(name="crea_finanziamento", description="Attiva un piano di ammortamento giornaliero su un utente")
-@app_commands.describe(
-    utente="L'utente a cui intestare il finanziamento",
-    prezzo_totale="L'ammontare totale del finanziamento",
-    durata_giorni="In quanti giorni (prelievi) deve essere estinto",
-    motivo="La causale del finanziamento"
-)
-async def crea_finanziamento(interaction: discord.Interaction, utente: discord.Member, prezzo_totale: float, durata_giorni: int, motivo: str = "Finanziamento Veicolo"):
-    if durata_giorni <= 0:
-        return await interaction.response.send_message("❌ La durata del finanziamento deve essere di almeno 1 giorno.", ephemeral=True)
-
-    quota_giornaliera = round(prezzo_totale / durata_giorni, 2)
-    conn = get_db_connection()
-    if not conn:
-        return await interaction.response.send_message("❌ Errore tecnico di connessione al database.", ephemeral=True)
-
-    def insert_finanziamento():
-        with conn.cursor() as cursor:
-            cursor.execute(
-                """INSERT INTO public.finanziamenti (user_id, importo_giornaliero, giorni_rimanenti, descrizione) 
-                   VALUES (%s, %s, %s, %s);""",
-                (str(utente.id), quota_giornaliera, durata_giorni, motivo)
-            )
-        conn.commit()
-
-    await asyncio.to_thread(insert_finanziamento)
-    conn.close()
-
-    await interaction.response.send_message(
-        f"✅ **Finanziamento Registrato**\n"
-        f"👤 **Beneficiario:** {utente.mention}\n"
-        f"💰 **Importo Totale:** {prezzo_totale}€\n"
-        f"📅 **Durata:** {durata_giorni} giorni\n"
-        f"📉 **Prelievo Giornaliero:** {quota_giornaliera}€/giorno (Scalo Automatico)"
-    )
 
 # ==========================================
 # BOT TREE: COMANDO ASSICURAZIONE (RUOLO SPECIFICO)
