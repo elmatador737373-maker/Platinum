@@ -61,41 +61,6 @@ def get_user_data(user_id):
             cur.close()
             conn.close()
 
-# ================= EVENTI INIZIALI =================
-
-@bot.event
-async def on_ready():
-    print(f'{"="*40}')
-    print(f'🤖 LOG IN SECONDO BOT: {bot.user}')
-    
-    # Avvia il loop dei finanziamenti se non è già attivo
-    if not controllo_finanziamenti.is_running():
-        controllo_finanziamenti.start()
-        print("📊 [TASK] Controllo finanziamenti avviato!")
-        
-    # Avvia il loop di assicurazioni e revisioni (soglia 7gg + DM) se non è già attivo
-    if not controllo_scadenze_veicoli.is_running():
-        controllo_scadenze_veicoli.start()
-        print("🚘 [TASK] Controllo scadenze veicoli (Assicurazioni/Revisioni) avviato!")
-    
-    try:
-        print("🔄 Sincronizzazione comandi slash...")
-        synced = await bot.tree.sync()
-        print(f"🔄 Sincronizzati {len(synced)} comandi!")
-    except Exception as e:
-        print(f"❌ Errore durante la sincronizzazione: {e}")
-
-    print(f"✅ Bot Online e pronto all'uso!")
-    print(f'{"="*40}')
-
-# --- Controllo globale autorizzazione server ---
-@bot.tree.interaction_check
-async def check_guild(interaction: discord.Interaction):
-    if interaction.guild_id not in ALLOWED_GUILDS:
-        await interaction.response.send_message("❌ Questo bot non è autorizzato in questo server.", ephemeral=True)
-        return False
-    return True
-
 from psycopg2.extras import RealDictCursor  # Assicurati di avere questo import in cima al file
 
 async def invia_log_finanziario(guild: discord.Guild, embed: discord.Embed):
@@ -763,6 +728,41 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
             await interaction.followup.send("❌ Si è verificato un errore imprevisto durante l'esecuzione del comando.", ephemeral=True)
     except Exception as e:
         print(f"Impossibile notificare l'utente dell'errore: {e}")
+
+# ================= EVENTI INIZIALI =================
+
+@bot.event
+async def on_ready():
+    print(f'{"="*40}')
+    print(f'🤖 LOG IN SECONDO BOT: {bot.user}')
+    
+    # Avvia il loop dei finanziamenti se non è già attivo
+    if not controllo_finanziamenti.is_running():
+        controllo_finanziamenti.start()
+        print("📊 [TASK] Controllo finanziamenti avviato!")
+        
+    # Avvia il loop di assicurazioni e revisioni (soglia 7gg + DM) se non è già attivo
+    if not controllo_scadenze_veicoli.is_running():
+        controllo_scadenze_veicoli.start()
+        print("🚘 [TASK] Controllo scadenze veicoli (Assicurazioni/Revisioni) avviato!")
+    
+    try:
+        print("🔄 Sincronizzazione comandi slash...")
+        synced = await bot.tree.sync()
+        print(f"🔄 Sincronizzati {len(synced)} comandi!")
+    except Exception as e:
+        print(f"❌ Errore durante la sincronizzazione: {e}")
+
+    print(f"✅ Bot Online e pronto all'uso!")
+    print(f'{"="*40}')
+
+# --- Controllo globale autorizzazione server ---
+@bot.tree.interaction_check
+async def check_guild(interaction: discord.Interaction):
+    if interaction.guild_id not in ALLOWED_GUILDS:
+        await interaction.response.send_message("❌ Questo bot non è autorizzato in questo server.", ephemeral=True)
+        return False
+    return True
 
 # ================= CONFIGURAZIONE FLASK PER RENDER =================
 app = Flask("")
