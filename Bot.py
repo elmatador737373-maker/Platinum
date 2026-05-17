@@ -727,11 +727,16 @@ async def bonifico(interaction: discord.Interaction, utente: discord.Member, amm
         await invia_log_finanziario(interaction.guild, emb)
 
     except Exception as e:
-        conn.rollback()
+        if 'conn' in locals() and conn:
+            conn.rollback()
         print(f"[ERROR] Errore durante il pagamento: {e}")
-        await interaction.response.send_message("❌ Errore tecnico durante la transazione.", ephemeral=True)
+        # NOTA: Abbiamo rimosso l'await da qui dentro perché faceva crashare il bot
     finally:
-        cur.close(); conn.close()
+        if 'cur' in locals() and cur:
+            cur.close()
+        if 'conn' in locals() and conn:
+            conn.close()
+
 
 # ================= GESTIONE ERRORI GLOBALE =================
 
