@@ -19,7 +19,7 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 
 # ID dei ruoli separati per i rispettivi comandi
 RUOLO_ASSICURAZIONE_ID = 1253460150141059198  
-RUOLO_REVISIONE_ID = 1253460178305679433      
+RUOLO_REVISIONE_ID = 125346018305350458      
 
 intents = discord.Intents.default()
 intents.members = True
@@ -389,18 +389,116 @@ async def stato_finanziamento(interaction: discord.Interaction):
     
     await interaction.response.send_message(embed=embed)
 
+import discord
+from discord import app_commands
+from discord.ext import tasks
+import asyncio
+from datetime import datetime, timedelta
+
 # ==========================================
-# BOT TREE: COMANDO ASSICURAZIONE (RUOLO SPECIFICO)
+# BACKGROUND TASK: CONTROLLO SCADENZE E AVVISI DM
 # ==========================================
-@bot.tree.command(name="assicurazione", description="Rinnova o imposta l'assicurazione attiva di un veicolo tramite targa")
-@app_commands.describe(targa="La targa del veicolo da assicurare", giorni="Giorni di validità dell'assicurazione")
-async def assicurazione(interaction: discord.Interaction, targa: str, giorni: int = 30):
+@tasks.loop(hours=24) # Gira una volta al giorno
+async def controllo_scadenze_veicoli():
+    conn = get_db_connection()
+    if not conn:
+        print("❌ [TASK SCADENZE] Errore di connessione al database.")
+        return
+
+    def elabora_scadenze_e_avvisi():
+        oggi = datetime.now().date()
+        domani = oggi + timedelta(days=1)
+        
+        scaduti_ass = []
+        scaduti_rev = []
+        avvisi_dm = [] # Lista di tuple: (owner_id, targa, tipo_scadenza)
+
+        with conn.cursor() as cursor:
+            # Recuperiamo i veicoli attivi. NOTA: Sostituisci 'owner_id' con il nome reale della tua colonna proprietario nel DB
+            cursor.execute("SELECT targa, data_scadenza_assicurazione, data_scadenza_revisione, owner_id FROM public.veicoli WHERE assicurato = true OR revisionato = true;")
+            veicoli = cursor.fetchall()
+            
+            for targa, scadenza_ass, scadenza_rev, owner_id in veicoli:
+                # --- Controllo Assicurazione ---
+                if scadenza_ass:
+                    try:
+                        data_ass = datetime.strptime(scadenza_ass, "%d/%m/%Y").date()
+                        if oggi >= data_ass:
+                            scaduti_ass.append(targa)
+                        elif data_ass == domani and owner_id:
+                            avvisi_dm.append((owner_id, targa, "l'Assicurazione"))
+                    except ValueError:
+                        pass
+                
+                # --- Controllo Revisione ---
+                if scadenza_rev:
+                    try:
+                        data_rev = datetime.strptime(scadenza_rev, "%d/%m/%Y").date()
+                        if oggi >= data_rev:
+                            scaduti_rev.append(targa)
+                        elif data_rev == domani and owner_id:
+                            avvisi_dm.append((owner_id, targa, "la Revisione"))
+                    except ValueError:
+                        pass
+
+            # Esegui gli update per i veicoli scaduti oggi
+            if scaduti_ass:
+                cursor.execute("UPDATE public.veicoli SET assicurato = false WHERE targa = ANY(%s);", (scaduti_ass,))
+            if scaduti_rev:
+                cursor.execute("UPDATE public.veicoli SET revisionato = false WHERE targa = ANY(%s);", (scaduti_rev,))
+                
+        conn.commit()
+        conn.close()
+        return avvisi_dm
+
+    # Esegui i controlli sul database in un thread separato
+    lista_avvisi = await asyncio.to_thread(elabora_scadenze_e_avvisi)
+
+    # --- Invio dei messaggi in DM agli utenti per avvisarli 1 giorno prima ---
+    for user_id, targa, tipo in lista_avvisi:
+        try:
+            user = await bot.fetch_user(int(user_id))
+            if user:
+                embed_dm = discord.Embed(
+                    title="⚠️ Avviso Scadenza Veicolo",
+                    description=f"Ciao {user.display_name}, ti avvisiamo che domani scadrà **{tipo}** del tuo veicolo.",
+                    color=discord.Color.red(),
+                    timestamp=datetime.now()
+                )
+                embed_dm.add_field(name="🚘 Veicolo", value=f"Targa: `{targa}`", inline=True)
+                embed_dm.add_field(name="📌 Stato", value="Scadenza nelle prossime 24 ore", inline=True)
+                embed_dm.set_footer(text="Notifiche automatiche Motorizzazione")
+                
+                await user.send(embed=embed_dm)
+        except discord.Forbidden:
+            print(f"⚠️ Impossibile inviare DM all'utente {user_id} (DMs chiusi).")
+        except Exception as e:
+            print(f"❌ Errore nell'invio del DM a {user_id}: {e}")
+
+    print("🔄 [TASK SCADENZE] Controllo scadenze e invio avvisi DM completato.")
+
+
+# Avvio del Task all'avvio del bot
+@bot.event
+async def on_ready():
+    if not controllo_scadenze_veicoli.is_running():
+        controllo_scadenze_veicoli.start()
+    print(f"🤖 Bot pronto e connesso come {bot.user}")
+
+
+# ==========================================
+# BOT TREE: COMANDO ASSICURAZIONE (TESTUALE ORIGINALE - 7 GIORNI)
+# ==========================================
+@bot.tree.command(name="assicurazione", description="Rinnova o imposta l'assicurazione attiva di un veicolo tramite targa (Validità: 7 giorni)")
+@app_commands.describe(targa="La targa del veicolo da assicurare")
+async def assicurazione(interaction: discord.Interaction, targa: str):
     user_roles_ids = [role.id for role in interaction.user.roles]
     if RUOLO_ASSICURAZIONE_ID not in user_roles_ids:
         return await interaction.response.send_message("⛔ Non hai il ruolo staff autorizzato per gestire l'Assicurazione.", ephemeral=True)
 
     targa_pulita = targa.upper()
-    data_scadenza = (datetime.now() + timedelta(days=giorni)).strftime("%d/%m/%Y")
+    # Impostato fisso a 7 giorni come richiesto
+    data_scadenza = (datetime.now() + timedelta(days=7)).strftime("%d/%m/%Y")
     conn = get_db_connection()
     if not conn:
         return await interaction.response.send_message("❌ Errore tecnico di connessione al database.", ephemeral=True)
@@ -417,36 +515,26 @@ async def assicurazione(interaction: discord.Interaction, targa: str, giorni: in
     risultato = await asyncio.to_thread(update_assicurazione)
     conn.close()
 
+    # Ripristinate le risposte e le tabelle di testo originali
     if risultato == "not_found":
         await interaction.response.send_message(f"❌ Nessun veicolo associato alla targa `{targa_pulita}` nella tabella `public.veicoli`.", ephemeral=True)
     else:
         await interaction.response.send_message(f"✅ **Assicurazione Aggiornata**: Il veicolo con targa **{targa_pulita}** è ora assicurato fino al `{data_scadenza}`.")
 
-async def invia_log_finanziario(guild, embed):
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("SELECT setting_value FROM server_settings WHERE setting_name = 'log_finanze'")
-        res = cur.fetchone()
-        cur.close(); conn.close()
-        if res:
-            canale = guild.get_channel(int(res['setting_value']))
-            if canale: await canale.send(embed=embed)
-    except Exception as e:
-        print(f"Errore log finanziario: {e}")
 
 # ==========================================
-# BOT TREE: COMANDO REVISIONE (RUOLO SPECIFICO)
+# BOT TREE: COMANDO REVISIONE (TESTUALE ORIGINALE - 7 GIORNI)
 # ==========================================
-@bot.tree.command(name="revisione", description="Rinnova o imposta la revisione statale di un veicolo tramite targa")
-@app_commands.describe(targa="La targa del veicolo da revisionare", giorni="Giorni di validità della revisione")
-async def revisione(interaction: discord.Interaction, targa: str, giorni: int = 30):
+@bot.tree.command(name="revisione", description="Rinnova o imposta la revisione statale di un veicolo tramite targa (Validità: 7 giorni)")
+@app_commands.describe(targa="La targa del veicolo da revisionare")
+async def revisione(interaction: discord.Interaction, targa: str):
     user_roles_ids = [role.id for role in interaction.user.roles]
     if RUOLO_REVISIONE_ID not in user_roles_ids:
         return await interaction.response.send_message("⛔ Non hai il ruolo staff autorizzato per gestire la Revisione.", ephemeral=True)
 
     targa_pulita = targa.upper()
-    data_scadenza = (datetime.now() + timedelta(days=giorni)).strftime("%d/%m/%Y")
+    # Impostato fisso a 7 giorni come richiesto
+    data_scadenza = (datetime.now() + timedelta(days=7)).strftime("%d/%m/%Y")
     conn = get_db_connection()
     if not conn:
         return await interaction.response.send_message("❌ Errore tecnico di connessione al database.", ephemeral=True)
@@ -463,10 +551,12 @@ async def revisione(interaction: discord.Interaction, targa: str, giorni: int = 
     risultato = await asyncio.to_thread(update_revisione)
     conn.close()
 
+    # Ripristinate le risposte e le tabelle di testo originali
     if risultato == "not_found":
         await interaction.response.send_message(f"❌ Nessun veicolo associato alla targa `{targa_pulita}` nella tabella `public.veicoli`.", ephemeral=True)
     else:
         await interaction.response.send_message(f"✅ **Revisione Aggiornata**: Il veicolo con targa **{targa_pulita}** è stato revisionato con successo fino al `{data_scadenza}`.")
+
 # ==========================================
 # BOT TREE: BONIFICO (ALLINEATO ALLA TABELLA)
 # ==========================================
