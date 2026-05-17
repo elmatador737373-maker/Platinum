@@ -658,6 +658,9 @@ async def revisione(interaction: discord.Interaction, targa: str):
 # ==========================================
 # BOT TREE: BONIFICO (ALLINEATO ALLA TABELLA)
 # ==========================================
+# ==========================================
+# BOT TREE: COMANDO BONIFICO (SISTEMATO)
+# ==========================================
 @bot.tree.command(name="bonifico", description="Invia denaro dalla tua banca alla banca di un altro utente")
 @app_commands.describe(utente="L'utente che riceverà il denaro", ammontare="La quantità di denaro da inviare")
 async def bonifico(interaction: discord.Interaction, utente: discord.Member, ammontare: int):
@@ -680,23 +683,30 @@ async def bonifico(interaction: discord.Interaction, utente: discord.Member, amm
     if not conn:
         return await interaction.followup.send("❌ Errore tecnico di connessione al database.", ephemeral=True)
 
+    # Variabile di controllo per sapere se la transazione è andata a buon fine
+    successo = False
+
     try:
         cur = conn.cursor()
         
-        # 1. Verifica manuale del saldo (visto che 'bank' nel tuo schema non ha un vincolo CHECK negativo)
+        # 1. Verifica manuale del saldo
         cur.execute("SELECT bank FROM public.users WHERE user_id = %s;", (sender_id,))
         mittente_data = cur.fetchone()
         
         if not mittente_data or mittente_data[0] < ammontare:
+            cur.close()
+            conn.close()
             return await interaction.followup.send("❌ Bonifico rifiutato: Non hai abbastanza denaro sul tuo conto bancario!", ephemeral=True)
 
-        # 2. Esecuzione dei prelievi e depositi usando esattamente le colonne 'bank' e 'user_id'
+        # 2. Esecuzione dei prelievi e depositi
         cur.execute("UPDATE public.users SET bank = bank - %s WHERE user_id = %s", (ammontare, sender_id))
         cur.execute("UPDATE public.users SET bank = bank + %s WHERE user_id = %s", (ammontare, receiver_id))
         
         # Salva le modifiche nel database
         conn.commit()
+        successo = True
 
+        # Genera embed di successo per l'utente
         embed = discord.Embed(
             title="🏦 BONIFICO BANCARIO ESEGUITO",
             color=discord.Color.blue(),
@@ -710,32 +720,29 @@ async def bonifico(interaction: discord.Interaction, utente: discord.Member, amm
         await interaction.followup.send(embed=embed)
 
     except Exception as e:
-        conn.rollback()
-        print(f"Errore imprevisto nel bonifico: {e}")
+        if 'conn' in locals() and conn:
+            conn.rollback()
+        print(f"[ERROR] Errore imprevisto nel bonifico: {e}")
         await interaction.followup.send("❌ Si è verificato un errore tecnico durante l'operazione.", ephemeral=True)
 
     finally:
-        if conn:
-            cur.close()
-            conn.close()
-
-        # LOGS
-        emb = discord.Embed(title="💵 LOG BONIFICO", color=discord.Color.green(), timestamp=discord.utils.utcnow())
-        emb.add_field(name="Mittente", value=interaction.user.mention)
-        emb.add_field(name="Destinatario", value=utente.mention)
-        emb.add_field(name="Importo", value=f"{importo}$")
-        await invia_log_finanziario(interaction.guild, emb)
-
-    except Exception as e:
-        if 'conn' in locals() and conn:
-            conn.rollback()
-        print(f"[ERROR] Errore durante il pagamento: {e}")
-        # NOTA: Abbiamo rimosso l'await da qui dentro perché faceva crashare il bot
-    finally:
+        # Chiudiamo le connessioni in modo sicuro
         if 'cur' in locals() and cur:
             cur.close()
         if 'conn' in locals() and conn:
             conn.close()
+
+    # 3. LOGS FINANZIARI (Eseguiti fuori dal blocco Try/Finally del DB per evitare conflitti)
+    if successo:
+        try:
+            emb = discord.Embed(title="💵 LOG BONIFICO", color=discord.Color.green(), timestamp=discord.utils.utcnow())
+            emb.add_field(name="Mittente", value=interaction.user.mention)
+            emb.add_field(name="Destinatario", value=utente.mention)
+            # Sistemato: 'importo' corretto in 'ammontare' per evitare l'errore NameError
+            emb.add_field(name="Importo", value=f"{ammontare}$") 
+            await invia_log_finanziario(interaction.guild, emb)
+        except Exception as log_error:
+            print(f"[ERROR] Impossibile inviare il log finanziario del bonifico: {log_error}")
 
 
 # ================= GESTIONE ERRORI GLOBALE =================
