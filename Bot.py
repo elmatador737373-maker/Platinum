@@ -254,7 +254,7 @@ async def crea_finanziamento(interaction: discord.Interaction, utente: discord.M
         f"👤 **Beneficiario:** {utente.mention}\n"
         f"💰 **Importo Totale:** {prezzo_totale}€\n"
         f"📅 **Durata:** {durata_giorni} giorni\n"
-        f"📉 **Prelievo Giornaliero:** {quota_giornaliera}€/giorno (automatico da `public.users.bank`)"
+        f"📉 **Prelievo Giornaliero:** {quota_giornaliera}€/giorno (Scalo Automatico)"
     )
 
 # ==========================================
@@ -385,7 +385,7 @@ async def bonifico(interaction: discord.Interaction, utente: discord.Member, amm
         embed.add_field(name="👤 Mittente", value=interaction.user.mention, inline=True)
         embed.add_field(name="👤 Destinatario", value=utente.mention, inline=True)
         embed.add_field(name="💰 Somma Inviata", value=f"**{ammontare:,}$**", inline=False)
-        embed.set_footer(text="Transazione eseguita con successo sulla tabella public.users")
+        embed.set_footer(text="Transazione eseguita con successo")
         
         await interaction.followup.send(embed=embed)
 
