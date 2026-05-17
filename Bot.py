@@ -18,7 +18,7 @@ TOKEN = os.environ.get("TOKEN")
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
 # ID dei ruoli separati per i rispettivi comandi
-RUOLO_ASSICURAZIONE_ID = 1253460150141059198  
+RUOLO_ASSICURAZIONE_ID = 1257780163656286281  
 RUOLO_REVISIONE_ID = 125346018305350458      
 
 intents = discord.Intents.default()
