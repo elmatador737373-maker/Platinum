@@ -19,7 +19,7 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 
 # ID dei ruoli separati per i rispettivi comandi
 RUOLO_ASSICURAZIONE_ID = 1257780163656286281  
-RUOLO_REVISIONE_ID = 125346018305350458      
+RUOLO_REVISIONE_ID = 1257782342504812688      
 
 intents = discord.Intents.default()
 intents.members = True
