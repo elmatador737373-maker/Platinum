@@ -492,12 +492,13 @@ import discord
 from discord import app_commands
 from discord.ext import tasks
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 
 # ==========================================
-# BACKGROUND TASK: CONTROLLO SCADENZE E AVVISI DM
+# BACKGROUND TASK: CONTROLLO SCADENZE E AVVISI DM (CORRETTO - ORE FIXED)
 # ==========================================
-@tasks.loop(hours=24) # Gira una volta al giorno
+# Il task ignora i riavvii di Render: si attiverà SOLO quando l'orologio segna le 14:00 UTC (16:00 ITA)
+@tasks.loop(time=time(hour=14, minute=0))
 async def controllo_scadenze_veicoli():
     conn = get_db_connection()
     if not conn:
@@ -506,66 +507,78 @@ async def controllo_scadenze_veicoli():
 
     def elabora_scadenze_e_avvisi():
         oggi = datetime.now().date()
+        soglia_7gg = oggi + timedelta(days=7)
         domani = oggi + timedelta(days=1)
         
-        scaduti_ass = []
-        scaduti_rev = []
-        avvisi_dm = [] # Lista di tuple: (owner_id, targa, tipo_scadenza)
+        avvisi_dm = [] # Lista di tuple: (owner_id, targa, tipo_scadenza, giorni_mancanti)
 
         with conn.cursor() as cursor:
-            # Recuperiamo i veicoli attivi. NOTA: Sostituisci 'owner_id' con il nome reale della tua colonna proprietario nel DB
-            cursor.execute("SELECT targa, data_scadenza_assicurazione, data_scadenza_revisione, owner_id FROM public.veicoli WHERE assicurato = true OR revisionato = true;")
+            # Query pulita: seleziona i veicoli che hanno almeno una scadenza impostata
+            cursor.execute("""
+                SELECT targa, data_scadenza_assicurazione, data_scadenza_revisione, owner_id 
+                FROM public.veicoli 
+                WHERE data_scadenza_assicurazione IS NOT NULL 
+                   OR data_scadenza_revisione IS NOT NULL;
+            """)
             veicoli = cursor.fetchall()
             
             for targa, scadenza_ass, scadenza_rev, owner_id in veicoli:
+                if not owner_id:
+                    continue
+
                 # --- Controllo Assicurazione ---
                 if scadenza_ass:
-                    try:
-                        data_ass = datetime.strptime(scadenza_ass, "%d/%m/%Y").date()
-                        if oggi >= data_ass:
-                            scaduti_ass.append(targa)
-                        elif data_ass == domani and owner_id:
-                            avvisi_dm.append((owner_id, targa, "l'Assicurazione"))
-                    except ValueError:
-                        pass
+                    # 'scadenza_ass' è già un oggetto datetime.date grazie a psycopg2
+                    if scadenza_ass == soglia_7gg:
+                        avvisi_dm.append((owner_id, targa, "l'Assicurazione", 7))
+                    elif scadenza_ass == domani:
+                        avvisi_dm.append((owner_id, targa, "l'Assicurazione", 1))
+                    elif scadenza_ass <= oggi:
+                        avvisi_dm.append((owner_id, targa, "l'Assicurazione (GIÀ SCADUTA!)", 0))
                 
                 # --- Controllo Revisione ---
                 if scadenza_rev:
-                    try:
-                        data_rev = datetime.strptime(scadenza_rev, "%d/%m/%Y").date()
-                        if oggi >= data_rev:
-                            scaduti_rev.append(targa)
-                        elif data_rev == domani and owner_id:
-                            avvisi_dm.append((owner_id, targa, "la Revisione"))
-                    except ValueError:
-                        pass
-
-            # Esegui gli update per i veicoli scaduti oggi
-            if scaduti_ass:
-                cursor.execute("UPDATE public.veicoli SET assicurato = false WHERE targa = ANY(%s);", (scaduti_ass,))
-            if scaduti_rev:
-                cursor.execute("UPDATE public.veicoli SET revisionato = false WHERE targa = ANY(%s);", (scaduti_rev,))
+                    # 'scadenza_rev' è già un oggetto datetime.date grazie a psycopg2
+                    if scadenza_rev == soglia_7gg:
+                        avvisi_dm.append((owner_id, targa, "la Revisione", 7))
+                    elif scadenza_rev == domani:
+                        avvisi_dm.append((owner_id, targa, "la Revisione", 1))
+                    elif scadenza_rev <= oggi:
+                        avvisi_dm.append((owner_id, targa, "la Revisione (GIÀ SCADUTA!)", 0))
                 
-        conn.commit()
         conn.close()
         return avvisi_dm
 
-    # Esegui i controlli sul database in un thread separato
+    # Esegui i controlli sul database in un thread separato per non bloccare il bot
     lista_avvisi = await asyncio.to_thread(elabora_scadenze_e_avvisi)
 
-    # --- Invio dei messaggi in DM agli utenti per avvisarli 1 giorno prima ---
-    for user_id, targa, tipo in lista_avvisi:
+    # --- Invio dei messaggi in DM agli utenti ---
+    for user_id, targa, tipo, giorni in lista_avvisi:
         try:
             user = await bot.fetch_user(int(user_id))
             if user:
+                # Personalizza il testo e la gravità dell'embed in base ai giorni rimasti
+                if giorni == 0:
+                    desc_testo = f"Ciao {user.display_name}, ti avvisiamo che **{tipo}** del tuo veicolo è **scaduta**! Mettiti in regola al più presto."
+                    colore_embed = discord.Color.dark_red()
+                    stato_testo = "🔴 SCADUTO"
+                elif giorni == 1:
+                    desc_testo = f"Ciao {user.display_name}, ti avvisiamo che **domani** scadrà **{tipo}** del tuo veicolo."
+                    colore_embed = discord.Color.red()
+                    stato_testo = "⏳ Scade tra 24 ore"
+                else:
+                    desc_testo = f"Ciao {user.display_name}, ti ricordiamo che tra **7 giorni** scadrà **{tipo}** del tuo veicolo."
+                    colore_embed = discord.Color.orange()
+                    stato_testo = "⚠️ Scadenza a breve (7 giorni)"
+
                 embed_dm = discord.Embed(
                     title="⚠️ Avviso Scadenza Veicolo",
-                    description=f"Ciao {user.display_name}, ti avvisiamo che domani scadrà **{tipo}** del tuo veicolo.",
-                    color=discord.Color.red(),
+                    description=desc_testo,
+                    color=colore_embed,
                     timestamp=datetime.now()
                 )
                 embed_dm.add_field(name="🚘 Veicolo", value=f"Targa: `{targa}`", inline=True)
-                embed_dm.add_field(name="📌 Stato", value="Scadenza nelle prossime 24 ore", inline=True)
+                embed_dm.add_field(name="📌 Stato", value=stato_testo, inline=True)
                 embed_dm.set_footer(text="Notifiche automatiche Motorizzazione")
                 
                 await user.send(embed=embed_dm)
@@ -577,16 +590,9 @@ async def controllo_scadenze_veicoli():
     print("🔄 [TASK SCADENZE] Controllo scadenze e invio avvisi DM completato.")
 
 
-# Avvio del Task all'avvio del bot
-@bot.event
-async def on_ready():
-    if not controllo_scadenze_veicoli.is_running():
-        controllo_scadenze_veicoli.start()
-    print(f"🤖 Bot pronto e connesso come {bot.user}")
-
 
 # ==========================================
-# BOT TREE: COMANDO ASSICURAZIONE (TESTUALE ORIGINALE - 7 GIORNI)
+# BOT TREE: COMANDO ASSICURAZIONE (CORRETTO - 7 GIORNI)
 # ==========================================
 @bot.tree.command(name="assicurazione", description="Rinnova o imposta l'assicurazione attiva di un veicolo tramite targa (Validità: 7 giorni)")
 @app_commands.describe(targa="La targa del veicolo da assicurare")
@@ -596,8 +602,11 @@ async def assicurazione(interaction: discord.Interaction, targa: str):
         return await interaction.response.send_message("⛔ Non hai il ruolo staff autorizzato per gestire l'Assicurazione.", ephemeral=True)
 
     targa_pulita = targa.upper()
-    # Impostato fisso a 7 giorni come richiesto
-    data_scadenza = (datetime.now() + timedelta(days=7)).strftime("%d/%m/%Y")
+    
+    # Data per il DB (oggetto date nativo) e per la risposta testuale
+    data_scadenza_db = (datetime.now() + timedelta(days=7)).date()
+    data_stampa = data_scadenza_db.strftime("%d/%m/%Y")
+    
     conn = get_db_connection()
     if not conn:
         return await interaction.response.send_message("❌ Errore tecnico di connessione al database.", ephemeral=True)
@@ -607,22 +616,22 @@ async def assicurazione(interaction: discord.Interaction, targa: str):
             cursor.execute("SELECT 1 FROM public.veicoli WHERE targa = %s;", (targa_pulita,))
             if not cursor.fetchone():
                 return "not_found"
-            cursor.execute("UPDATE public.veicoli SET assicurato = true, data_scadenza_assicurazione = %s WHERE targa = %s;", (data_scadenza, targa_pulita))
+            # Rimosso il campo finto 'assicurato = true'
+            cursor.execute("UPDATE public.veicoli SET data_scadenza_assicurazione = %s WHERE targa = %s;", (data_scadenza_db, targa_pulita))
         conn.commit()
         return "success"
 
     risultato = await asyncio.to_thread(update_assicurazione)
     conn.close()
 
-    # Ripristinate le risposte e le tabelle di testo originali
     if risultato == "not_found":
         await interaction.response.send_message(f"❌ Nessun veicolo associato alla targa `{targa_pulita}` nella tabella `public.veicoli`.", ephemeral=True)
     else:
-        await interaction.response.send_message(f"✅ **Assicurazione Aggiornata**: Il veicolo con targa **{targa_pulita}** è ora assicurato fino al `{data_scadenza}`.")
+        await interaction.response.send_message(f"✅ **Assicurazione Aggiornata**: Il veicolo con targa **{targa_pulita}** è ora assicurato fino al `{data_stampa}`.")
 
 
 # ==========================================
-# BOT TREE: COMANDO REVISIONE (TESTUALE ORIGINALE - 7 GIORNI)
+# BOT TREE: COMANDO REVISIONE (CORRETTO - 7 GIORNI)
 # ==========================================
 @bot.tree.command(name="revisione", description="Rinnova o imposta la revisione statale di un veicolo tramite targa (Validità: 7 giorni)")
 @app_commands.describe(targa="La targa del veicolo da revisionare")
@@ -632,8 +641,11 @@ async def revisione(interaction: discord.Interaction, targa: str):
         return await interaction.response.send_message("⛔ Non hai il ruolo staff autorizzato per gestire la Revisione.", ephemeral=True)
 
     targa_pulita = targa.upper()
-    # Impostato fisso a 7 giorni come richiesto
-    data_scadenza = (datetime.now() + timedelta(days=7)).strftime("%d/%m/%Y")
+    
+    # Data per il DB (oggetto date nativo) e per la risposta testuale
+    data_scadenza_db = (datetime.now() + timedelta(days=7)).date()
+    data_stampa = data_scadenza_db.strftime("%d/%m/%Y")
+    
     conn = get_db_connection()
     if not conn:
         return await interaction.response.send_message("❌ Errore tecnico di connessione al database.", ephemeral=True)
@@ -643,18 +655,19 @@ async def revisione(interaction: discord.Interaction, targa: str):
             cursor.execute("SELECT 1 FROM public.veicoli WHERE targa = %s;", (targa_pulita,))
             if not cursor.fetchone():
                 return "not_found"
-            cursor.execute("UPDATE public.veicoli SET revisionato = true, data_scadenza_revisione = %s WHERE targa = %s;", (data_scadenza, targa_pulita))
+            # Rimosso il campo finto 'revisionato = true'
+            cursor.execute("UPDATE public.veicoli SET data_scadenza_revisione = %s WHERE targa = %s;", (data_scadenza_db, targa_pulita))
         conn.commit()
         return "success"
 
     risultato = await asyncio.to_thread(update_revisione)
     conn.close()
 
-    # Ripristinate le risposte e le tabelle di testo originali
     if risultato == "not_found":
         await interaction.response.send_message(f"❌ Nessun veicolo associato alla targa `{targa_pulita}` nella tabella `public.veicoli`.", ephemeral=True)
     else:
-        await interaction.response.send_message(f"✅ **Revisione Aggiornata**: Il veicolo con targa **{targa_pulita}** è stato revisionato con successo fino al `{data_scadenza}`.")
+        await interaction.response.send_message(f"✅ **Revisione Aggiornata**: Il veicolo con targa **{targa_pulita}** è stato revisionato con successo fino al `{data_stampa}`.")
+
 
 # ==========================================
 # BOT TREE: BONIFICO (ALLINEATO ALLA TABELLA)
