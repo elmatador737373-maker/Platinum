@@ -92,60 +92,67 @@ async def invia_log_finanziario(guild: discord.Guild, embed: discord.Embed):
 
     except Exception as e:
         print(f"❌ Errore durante l'invio del log finanziario: {e}")
+from datetime import datetime, timedelta, time
+import discord
+from discord.ext import tasks
+import asyncio
+
 # ==========================================
-# TASK AUTOMATICO GIORNALIERO (FINANZIAMENTI)
+# TASK AUTOMATICO GIORNALIERO (ORE 16:00 EUROPA)
 # ==========================================
-@tasks.loop(hours=24.0)
+# Configurato alle 14:00 UTC (ovvero le 16:00 circa in Italia/Europa)
+@tasks.loop(time=time(hour=14, minute=0))
 async def controllo_finanziamenti():
-    """Controlla ogni 24 ore i finanziamenti attivi e scala la quota dalla banca."""
-    # Eseguiamo i controlli sul DB e otteniamo la lista degli insolventi o dei log da inviare
+    """Controlla i finanziamenti ogni giorno alle 16:00, gestisce i saldi insufficienti e invia i log."""
     risultati = await asyncio.to_thread(_elabora_finanziamenti_giornalieri)
     
-    if not risultati:
-        return
-        
-    # Prendiamo la prima guild (server) disponibile in cui si trova il bot per cercare il canale log
-    if not bot.guilds:
+    if not risultati or not bot.guilds:
         return
     guild = bot.guilds[0] 
 
-    # Gestione delle notifiche (Log e DM) per chi non ha pagato
-    for insolvente in risultati["insolventi"]:
-        uid = insolvente["user_id"]
-        quota = insolvente["quota"]
-        saldo = insolvente["saldo"]
+    # 1. LOG DEI PAGAMENTI COMPLETI (Successo Totale)
+    for pagato in risultati["pagati"]:
+        uid = pagato["user_id"]
+        quota = pagato["quota"]
+        rimanenti = pagato["giorni_rimanenti"]
         
-        # 1. Invio Log nel canale del server (usando la tua funzione esistente)
-        embed_log = discord.Embed(
-            title="⚠️ Mancato Pagamento Finanziamento",
-            description=f"L'utente <@{uid}> non ha abbastanza fondi in banca per coprire la quota giornaliera.",
-            color=discord.Color.red(),
+        embed = discord.Embed(
+            title="✅ Quota Finanziamento Scalata",
+            description=f"Il sistema ha prelevato con successo l'intera quota dall'utente <@{uid}>.",
+            color=discord.Color.green(),
             timestamp=datetime.now()
         )
-        embed_log.add_field(name="📉 Quota Giornaliera", value=f"{quota:,.2f}€", inline=True)
-        embed_log.add_field(name="🏦 Saldo Attuale", value=f"{saldo:,.2f}€" if saldo is not None else "N/D", inline=True)
-        embed_log.set_footer(text="Sistema Ammortamento Automatico")
+        embed.add_field(name="📉 Importo Prelevato", value=f"{quota:,.2f}€", inline=True)
+        embed.add_field(name="📅 Giorni Rimanenti", value=f"{rimanents} giorni" if rimanenti > 0 else "🏁 ESTINTO!", inline=True)
+        embed.set_footer(text="Riscossione Automatica")
+        await invia_log_finanziario(guild, embed)
+
+    # 2. LOG DEI PAGAMENTI PARZIALI (Utente con pochi soldi, conto svuotato + debito)
+    for parziale in risultati["parziali"]:
+        uid = parziale["user_id"]
+        prelevato = parziale["prelevato"]
+        mancante = parziale["mancante"]
+        tot_debito = parziale["nuovo_debito_totale"]
         
-        await invia_log_finanziario(guild, embed_log)
+        embed = discord.Embed(
+            title="⚠️ Pagamento Parziale & Accumulo Debito",
+            description=f"L'utente <@{uid}> non aveva abbastanza fondi. Il conto è stato svuotato.",
+            color=discord.Color.orange(),
+            timestamp=datetime.now()
+        )
+        embed.add_field(name="💸 Svuotato e Prelevato", value=f"{prelevato:,.2f}€", inline=True)
+        embed.add_field(name="🚨 Quota Mancante Oggi", value=f"{mancante:,.2f}€", inline=True)
+        embed.add_field(name="📊 Debito Totale Rimandato a Domani", value=f"**{tot_debito:,.2f}€**", inline=False)
+        embed.set_footer(text="Conto Azzerato - Riscossione Coatta")
+        await invia_log_finanziario(guild, embed)
         
-        # 2. Invio notifica in DM all'utente
+        # Invia un DM di avviso all'utente insolvente
         try:
             user = await bot.fetch_user(int(uid))
             if user:
-                embed_user = discord.Embed(
-                    title="🏦 Sollecito di Pagamento",
-                    description=f"Ciao {user.display_name}, il tuo conto bancario non dispone di fondi sufficienti per saldare la quota odierna del finanziamento.",
-                    color=discord.Color.orange(),
-                    timestamp=datetime.now()
-                )
-                embed_user.add_field(name="📉 Quota da pagare", value=f"**{quota:,.2f}€**", inline=True)
-                embed_user.add_field(name="💰 Il tuo Saldo", value=f"{saldo:,.2f}€" if saldo is not None else "0.00€", inline=True)
-                embed_user.add_field(name="⚠️ Conseguenze", value="I giorni rimanenti del tuo piano sono stati congelati. Deposita il denaro al più presto per evitare sanzioni civili o pignoramenti.", inline=False)
-                await user.send(embed=embed_user)
-        except discord.Forbidden:
-            print(f"[FINANZIAMENTI] Impossibile inviare DM a {uid} (Utente con DM chiusi).")
-        except Exception as e:
-            print(f"[FINANZIAMENTI] Errore invio DM a {uid}: {e}")
+                await user.send(embed=embed)
+        except Exception:
+            pass
 
 
 def _elabora_finanziamenti_giornalieri():
@@ -153,42 +160,69 @@ def _elabora_finanziamenti_giornalieri():
     if not db:
         return None
         
-    risultati_azione = {"insolventi": []}
+    risultati_azione = {"pagati": [], "parziali": []}
     
     try:
         with db.cursor() as cursor:
-            cursor.execute("SELECT id, user_id, importo_giornaliero, giorni_rimanenti FROM public.finanziamenti WHERE giorni_rimanenti > 0;")
+            # Selezioniamo anche la nuova colonna 'debito_accumulato'
+            cursor.execute("SELECT id, user_id, importo_giornaliero, giorni_rimanenti, debito_accumulato FROM public.finanziamenti WHERE giorni_rimanenti > 0;")
             finanziamenti = cursor.fetchall()
             
             for f in finanziamenti:
-                f_id, user_id, quota, giorni_rimanenti = f
+                f_id, user_id, quota_base, giorni_rimanenti, debito_accumulato = f
+                
+                # La quota totale da pagare oggi è: la quota del giorno + i debiti passati
+                quota_totale_oggi = quota_base + debito_accumulato
                 
                 cursor.execute("SELECT bank FROM public.users WHERE user_id = %s;", (user_id,))
                 res = cursor.fetchone()
-                saldo_banca = res[0] if res else None
+                saldo_banca = res[0] if res else 0
                 
-                # SE HA I SOLDI: Scala normalmente
-                if saldo_banca is not None and saldo_banca >= quota:
-                    cursor.execute("UPDATE public.users SET bank = bank - %s WHERE user_id = %s;", (quota, user_id))
+                # CASO 1: L'utente ha abbastanza soldi per pagare TUTTO (Quota + Vecchi Debiti)
+                if saldo_banca >= quota_totale_oggi:
+                    cursor.execute("UPDATE public.users SET bank = bank - %s WHERE user_id = %s;", (quota_totale_oggi, user_id))
                     
+                    # Il debito accumulato si azzera perché ha pagato tutto
+                    nuovo_debito = 0
                     nuovi_giorni = giorni_rimanenti - 1
+                    
                     if nuovi_giorni <= 0:
                         cursor.execute("DELETE FROM public.finanziamenti WHERE id = %s;", (f_id,))
                     else:
-                        cursor.execute("UPDATE public.finanziamenti SET giorni_rimanenti = %s WHERE id = %s;", (nuovi_giorni, f_id))
-                
-                # SE NON HA I SOLDI (O l'utente non esiste):
-                else:
-                    print(f"[FINANZIAMENTI] L'utente {user_id} insolvente. Fondi insufficienti ({saldo_banca}€) per la quota di {quota}€.")
+                        cursor.execute("UPDATE public.finanziamenti SET giorni_rimanenti = %s, debito_accumulato = %s WHERE id = %s;", (nuovi_giorni, nuovo_debito, f_id))
                     
-                    # OPZIONE AGGIUNTIVA (Facoltativa): Se vuoi applicare una multa automatica di ad esempio 50€ nel DB puoi decommentare qui:
-                    # cursor.execute("UPDATE public.users SET bank = bank - 50 WHERE user_id = %s;", (user_id,))
-                    
-                    # Salviamo i dettagli per inviare i log asincroni fuori dal thread
-                    risultati_azione["insolventi"].append({
+                    risultati_azione["pagati"].append({
                         "user_id": user_id,
-                        "quota": quota,
-                        "saldo": saldo_banca
+                        "quota": quota_totale_oggi,
+                        "giorni_rimanenti": nuovi_giorni
+                    })
+                
+                # CASO 2: I soldi non bastano. Il bot si prende tutto quello che trova e accumula il debito
+                else:
+                    prelevabile = saldo_banca if saldo_banca > 0 else 0
+                    mancante_oggi = quota_totale_oggi - prelevabile
+                    
+                    # Svuota il conto dell'utente a 0
+                    cursor.execute("UPDATE public.users SET bank = 0 WHERE user_id = %s;", (user_id,))
+                    
+                    # Il nuovo debito totale diventa quello che mancava oggi (che include già la quota base + i vecchi debiti)
+                    nuovo_debito_totale = mancante_oggi
+                    
+                    # Scaliamo comunque il giorno, ma salviamo il debito rimanente per domani
+                    nuovi_giorni = giorni_rimanenti - 1
+                    
+                    if nuovi_giorni <= 0 and nuovo_debito_totale <= 0:
+                        cursor.execute("DELETE FROM public.finanziamenti WHERE id = %s;", (f_id,))
+                    else:
+                        # Se i giorni finiscono ma ha ancora debito, lasciamo il finanziamento attivo a 0 giorni finché non sana il debito
+                        effettivi_giorni = nuovi_giorni if nuovi_giorni > 0 else 0
+                        cursor.execute("UPDATE public.finanziamenti SET giorni_rimanenti = %s, debito_accumulato = %s WHERE id = %s;", (effettivi_giorni, nuovo_debito_totale, f_id))
+                    
+                    risultati_azione["parziali"].append({
+                        "user_id": user_id,
+                        "prelevato": prelevabile,
+                        "mancante": quota_base - prelevabile if (quota_base - prelevabile) > 0 else 0,
+                        "nuovo_debito_totale": nuovo_debito_totale
                     })
                     
             db.commit()
@@ -198,10 +232,6 @@ def _elabora_finanziamenti_giornalieri():
         db.close()
         
     return risultati_azione
-
-@controllo_finanziamenti.before_loop
-async def before_controllo_finanziamenti():
-    await bot.wait_until_ready()
 
 # ==========================================
 # BOT TREE: MOSTRA PATENTE (PERSONALE)
