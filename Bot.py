@@ -350,6 +350,130 @@ class FirmaFinanziamentoView(discord.ui.View):
 
 
 # ==========================================
+# BOT TREE: COMANDO MECCANICO (GESTIONE MODIFICHE VEICOLO)
+# ==========================================
+@bot.tree.command(name="veicolo_mod", description="Permette ai meccanici di installare o rimuovere modifiche da un veicolo")
+@app_commands.describe(
+    targa="La targa del veicolo da modificare",
+    azione="Scegli se aggiungere o rimuovere la modifica",
+    modifica="Il nome della modifica (es. Motore Step 3, Turbo, Estetica)"
+)
+@app_commands.choices(azione=[
+    app_commands.Choice(name="🔧 Installa Modifica", value="aggiungi"),
+    app_commands.Choice(name="🗑️ Rimuovi Modifica", value="rimuovi")
+])
+async def veicolo_mod(interaction: discord.Interaction, targa: str, azione: str, modifica: str):
+    # Controllo dei ruoli per l'accesso (Sostituisci RUOLO_MECCANICO_ID con l'ID reale del tuo ruolo)
+    user_roles_ids = [role.id for role in interaction.user.roles]
+    if 1257782342504812688 not in user_roles_ids:
+        return await interaction.response.send_message(
+            "⛔ Non hai il ruolo lavorativo adatto (Meccanico) per eseguire questa operazione.", 
+            ephemeral=True
+        )
+
+    targa_pulita = targa.upper().strip()
+    modifica_pulita = modifica.strip()
+    
+    if not modifica_pulita:
+        return await interaction.response.send_message("❌ Devi specificare una modifica valida!", ephemeral=True)
+
+    await interaction.response.defer(ephemeral=False)
+
+    conn = get_db_connection()
+    if not conn:
+        return await interaction.followup.send("❌ Errore tecnico di connessione al database.", ephemeral=True)
+
+    try:
+        cur = conn.cursor()
+        
+        # 1. Verifichiamo se il veicolo esiste e prendiamo le modifiche attuali
+        cur.execute("SELECT modello, modifiche, owner_id FROM public.veicoli WHERE targa = %s;", (targa_pulita,))
+        veicolo_data = cur.fetchone()
+        
+        if not veicolo_data:
+            cur.close()
+            conn.close()
+            return await interaction.followup.send(f"❌ Nessun veicolo trovato con targa `{targa_pulita}`.", ephemeral=True)
+            
+        modello, modifiche_raw, owner_id = veicolo_data
+        
+        # Gestiamo la stringa delle modifiche trasformandola in una lista pulita
+        lista_modifiche = [m.strip() for m in modifiche_raw.split(",") if m.strip()] if modifiche_raw else []
+
+        # 2. Logica di aggiunta o rimozione
+        if azione == "aggiungi":
+            # Evitiamo duplicati identici (es. due Turbo uguali)
+            if modifica_pulita.lower() in [m.lower() for m in lista_modifiche]:
+                cur.close()
+                conn.close()
+                return await interaction.followup.send(
+                    f"⚠️ La modifica **{modifica_pulita}** risulta già installata su questo veicolo!", 
+                    ephemeral=True
+                )
+            
+            lista_modifiche.append(modifica_pulita)
+            titolo_embed = "🛠| MODIFICA INSTALLATA CON SUCCESSO"
+            colore_embed = discord.Color.green()
+            descrizione_embed = f"Il meccanico {interaction.user.mention} ha installato una nuova modifica."
+            testo_campo = "Componente Montato"
+            
+        elif azione == "rimuovi":
+            # Cerchiamo la modifica ignorando maiuscole/minuscole
+            trovata = False
+            for m in lista_modifiche:
+                if m.lower() == modifica_pulita.lower():
+                    lista_modifiche.remove(m)
+                    trovata = True
+                    break
+            
+            if not trovata:
+                cur.close()
+                conn.close()
+                return await interaction.followup.send(
+                    f"❌ La modifica **{modifica_pulita}** non è attualmente installata su questo veicolo.", 
+                    ephemeral=True
+                )
+                
+            titolo_embed = "🔧| MODIFICA RIMOSSA CON SUCCESSO"
+            colore_embed = discord.Color.red()
+            descrizione_embed = f"Il meccanico {interaction.user.mention} ha rimosso un componente dal veicolo."
+            testo_campo = "Componente Smontato"
+
+        # 3. Aggiorniamo il database con la nuova lista modifiche
+        nuove_modifiche_str = ", ".join(lista_modifiche)
+        cur.execute("UPDATE public.veicoli SET modifiche = %s WHERE targa = %s;", (nuove_modifiche_str, targa_pulita))
+        conn.commit()
+
+        # 4. Creiamo il resoconto visivo per l'officina/utente
+        embed = discord.Embed(
+            title=titolo_embed,
+            description=descrizione_embed,
+            color=colore_embed,
+            timestamp=datetime.now()
+        )
+        embed.add_field(name="🚘 Veicolo", value=f"**{modello}** (`{targa_pulita}`)", inline=True)
+        embed.add_field(name="👤 Proprietario", value=f"<@{owner_id}>" if owner_id else "Nessuno", inline=True)
+        embed.add_field(name=testo_campo, value=f"```\n{modifica_pulita}\n```", inline=False)
+        
+        # Mostriamo lo stato attuale di tutte le modifiche del veicolo
+        stato_attuale = ", ".join(lista_modifiche) if lista_modifiche else "*Nessuna modifica installata*"
+        embed.add_field(name="📊 Modifiche Attuali sul Veicolo", value=f"```{stato_attuale}```", inline=False)
+        
+        embed.set_footer(text=f"Officina Autorizzata | Operatore: {interaction.user.display_name}")
+        await interaction.followup.send(embed=embed)
+
+    except Exception as e:
+        if 'conn' in locals() and conn:
+            conn.rollback()
+        print(f"[ERROR] Errore durante l'aggiornamento modifiche veicolo: {e}")
+        await interaction.followup.send("❌ Errore tecnico durante l'elaborazione dell'ordine di lavoro.", ephemeral=True)
+    finally:
+        if 'cur' in locals() and cur:
+            cur.close()
+        if 'conn' in locals() and conn:
+            conn.close()
+
+# ==========================================
 # BOT TREE: CREA FINANZIAMENTO (CON PULSANTE)
 # ==========================================
 @bot.tree.command(name="crea_finanziamento", description="Attiva un piano di ammortamento giornaliero su un utente (Richiede Firma)")
