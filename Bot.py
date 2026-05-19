@@ -881,18 +881,40 @@ async def bonifico(interaction: discord.Interaction, utente: discord.Member, amm
         if 'conn' in locals() and conn:
             conn.close()
 
-    # 3. LOGS FINANZIARI (Eseguiti fuori dal blocco Try/Finally del DB per evitare conflitti)
+    # # 3. LOGS FINANZIARI (Eseguiti fuori dal blocco Try/Finally del DB per evitare conflitti)
     if successo:
         try:
-            emb = discord.Embed(title="💵 LOG BONIFICO", color=discord.Color.green(), timestamp=discord.utils.utcnow())
+            # Creazione dell'embed del log
+            emb = discord.Embed(
+                title="💵 LOG BONIFICO", 
+                color=discord.Color.green(), 
+                timestamp=discord.utils.utcnow()
+            )
             emb.add_field(name="Mittente", value=interaction.user.mention)
             emb.add_field(name="Destinatario", value=utente.mention)
-            # Sistemato: 'importo' corretto in 'ammontare' per evitare l'errore NameError
             emb.add_field(name="Importo", value=f"{ammontare}$") 
+            
+            # 1. Primo log (Canale finanziario predefinito)
             await invia_log_finanziario(interaction.guild, emb)
+            
+            # 2. Secondo log (Canale specifico a parte)
+            ID_CANALE_SEPARATO = 1482758643773341848
+            canale_separato = interaction.guild.get_channel(ID_CANALE_SEPARATO)
+            
+            # Se il canale non è in cache, proviamo a recuperarlo direttamente da Discord
+            if not canale_separato:
+                try:
+                    canale_separato = await interaction.guild.fetch_channel(ID_CANALE_SEPARATO)
+                except Exception:
+                    canale_separato = None
+                    
+            if canale_separato:
+                await canale_separato.send(embed=emb)
+            else:
+                print(f"[WARNING] Impossibile trovare il canale con ID {ID_CANALE_SEPARATO} per il log separato.")
+                
         except Exception as log_error:
             print(f"[ERROR] Impossibile inviare il log finanziario del bonifico: {log_error}")
-
 
 # ================= GESTIONE ERRORI GLOBALE =================
 
