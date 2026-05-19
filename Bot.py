@@ -277,51 +277,68 @@ async def mostra_patente(interaction: discord.Interaction):
 # ==========================================
 @bot.tree.command(name="telefono", description="Apri lo smartphone virtuale di Evren City RP")
 async def telefono(interaction: discord.Interaction):
-    # Defer immediato per evitare il timeout dei 3 secondi di Discord
+    # Defer immediato per prevenire il timeout di 3 secondi
     await interaction.response.defer(ephemeral=True)
     
     user_id = str(interaction.user.id)
     username_discord = interaction.user.name
 
-    conn = psycopg2.connect(DB_CON)
-    cur = conn.cursor()
+    try:
+        conn = psycopg2.connect(DB_CON)
+        cur = conn.cursor()
 
-    cur.execute("SELECT numero_telefono, email_indirizzo, batteria, app_installate FROM telefono_sistema WHERE user_id = %s;", (user_id,))
-    res = cur.fetchone()
+        # 1. Prova a cercare l'utente nel database
+        cur.execute("SELECT numero_telefono, email_indirizzo, batteria, app_installate FROM telefono_sistema WHERE user_id = %s;", (user_id,))
+        res = cur.fetchone()
 
-    if not res:
-        nuovo_numero = f"555-{random.randint(1000, 9999)}"
-        nuova_email = f"{username_discord.lower().replace(' ', '')}@evren.city"
-        
-        cur.execute("""
-            INSERT INTO telefono_sistema (user_id, numero_telefono, email_indirizzo) 
-            VALUES (%s, %s, %s) ON CONFLICT DO NOTHING;
-        """, (user_id, nuovo_numero, nuova_email))
-        conn.commit()
-        
-        numero, email, batteria, apps = nuovo_numero, nuova_email, 100, ['whatsapp', 'email', 'appstore']
-    else:
+        # 2. Se NON esiste (Primo avvio assoluto del telefono per questo utente)
+        if not res:
+            nuovo_numero = f"555-{random.randint(1000, 9999)}"
+            nuova_email = f"{username_discord.lower().replace(' ', '')}@evren.city"
+            apps_default = ['whatsapp', 'email', 'appstore']
+            
+            # Inserimento esplicito di TUTTI i campi per non lasciare nulla al caso
+            cur.execute("""
+                INSERT INTO telefono_sistema (user_id, numero_telefono, email_indirizzo, batteria, app_installate) 
+                VALUES (%s, %s, %s, 100, %s) 
+                ON CONFLICT (user_id) DO NOTHING;
+            """, (user_id, nuovo_numero, nuova_email, apps_default))
+            conn.commit()
+            
+            # Rileggiamo subito dal database dopo l'inserimento per sicurezza matematica
+            cur.execute("SELECT numero_telefono, email_indirizzo, batteria, app_installate FROM telefono_sistema WHERE user_id = %s;", (user_id,))
+            res = cur.fetchone()
+
+        # 3. Estrazione finale sicura dei dati
         numero, email, batteria, apps = res
+        
+        cur.close()
+        conn.close()
 
-    cur.close()
-    conn.close()
+    except Exception as db_error:
+        print(f"❌ [ERRORE SQL TELEFONO]: {db_error}")
+        return await interaction.followup.send("❌ Errore critico di sincronizzazione con il database della SIM.", ephemeral=True)
 
-    embed = discord.Embed(
-        title="📱 EVREN OS v14.2",
-        description=f"🔋 **Batteria:** {batteria}%  |  📶 **Rete:** Evren 5G\n"
-                    f"─────────────────────────────\n"
-                    f"👤 **Utente:** {interaction.user.mention}\n"
-                    f"📞 **Numero:** `{numero}`\n"
-                    f"✉️ **Indirizzo:** `{email}`\n"
-                    f"─────────────────────────────\n"
-                    f"👇 *Tocca un'applicazione per aprirla* 👇",
-        color=discord.Color.from_rgb(47, 49, 54)
-    )
+    # 4. Generazione della schermata grafica
+    try:
+        embed = discord.Embed(
+            title="📱 EVREN OS v14.2",
+            description=f"🔋 **Batteria:** {batteria}%  |  📶 **Rete:** Evren 5G\n"
+                        f"─────────────────────────────\n"
+                        f"👤 **Utente:** {interaction.user.mention}\n"
+                        f"📞 **Numero:** `{numero}`\n"
+                        f"✉️ **Indirizzo:** `{email}`\n"
+                        f"─────────────────────────────\n"
+                        f"👇 *Tocca un'applicazione per aprirla* 👇",
+            color=discord.Color.from_rgb(47, 49, 54)
+        )
 
-    view = SchermataHomeGrigliaView(user_id, apps)
-    # Risposta tramite followup obbligatoria per via del defer()
-    await interaction.followup.send(embed=embed, view=view, ephemeral=True)
-
+        view = SchermataHomeGrigliaView(user_id, apps)
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+        
+    except Exception as gui_error:
+        print(f"❌ [ERRORE INTERFACCIA TELEFONO]: {gui_error}")
+        return await interaction.followup.send("❌ Errore grafico nel caricamento dello schermo.", ephemeral=True)
 
 # ==========================================
 # INTERFACCIA HOMESCREEN A GRIGLIA (2 COLONNE)
