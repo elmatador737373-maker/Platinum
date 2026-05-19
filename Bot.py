@@ -1298,6 +1298,9 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
     except Exception as e:
         print(f"Impossibile notificare l'utente dell'errore: {e}")
 
+# ================= CONFIGURAZIONI AGGIUNTIVE TELEFONO =================
+GUILD_ID = 1233353915559313478 # METTI QUI L'ID DEL TUO SERVER DISCORD RP
+
 # ================= EVENTI INIZIALI =================
 
 @bot.event
@@ -1315,12 +1318,27 @@ async def on_ready():
         controllo_scadenze_veicoli.start()
         print("🚘 [TASK] Controllo scadenze veicoli (Assicurazioni/Revisioni) avviato!")
     
+    # 1. REGISTRAZIONE DELLA VIEW PERSISTENTE DEL TELEFONO
+    # Serve a mantenere i bottoni del telefono funzionanti dopo il riavvio del bot
     try:
-        print("🔄 Sincronizzazione comandi slash...")
-        synced = await bot.tree.sync()
-        print(f"🔄 Sincronizzati {len(synced)} comandi!")
+        bot.add_view(SchermataHomeGrigliaView(user_id=None, apps=None))
+        print("📱 [VIEW] Interfaccia persistente Telefono caricata con successo!")
     except Exception as e:
-        print(f"❌ Errore durante la sincronizzazione: {e}")
+        print(f"❌ Errore caricamento View persistente: {e}")
+    
+    # 2. SINCRONIZZAZIONE LOCALE ISTANTANEA (Sostituisce il vecchio sync globale lento)
+    try:
+        print("🔄 Sincronizzazione comandi slash locale sul server...")
+        guild = discord.Object(id=GUILD_ID)
+        
+        # Copia i comandi globali all'interno del tuo server specifico
+        bot.tree.copy_global_to(guild=guild)
+        
+        # Sincronizza l'albero dei comandi sul server
+        synced = await bot.tree.sync(guild=guild)
+        print(f"🔄 Sincronizzati {len(synced)} comandi in modo istantaneo nel server {GUILD_ID}!")
+    except Exception as e:
+        print(f"❌ Errore durante la sincronizzazione locale: {e}")
 
     print(f"✅ Bot Online e pronto all'uso!")
     print(f'{"="*40}')
