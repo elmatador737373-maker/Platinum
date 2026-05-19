@@ -273,11 +273,28 @@ async def mostra_patente(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 # ==========================================
+# CONFIGURAZIONE STRUTTURE DATI TELEFONO
+# ==========================================
+INFO_APP_GRIGLIA = {
+    "whatsapp": {"nome": "WhatsApp", "emoji": "💬", "stile": discord.ButtonStyle.green},
+    "email": {"nome": "Mail", "emoji": "✉️", "stile": discord.ButtonStyle.blurple},
+    "appstore": {"nome": "App Store", "emoji": "🛍️", "stile": discord.ButtonStyle.gray},
+    "instagram": {"nome": "Instagram", "emoji": "📸", "stile": discord.ButtonStyle.secondary},
+    "tiktok": {"nome": "TikTok", "emoji": "🎵", "stile": discord.ButtonStyle.secondary}
+}
+
+APP_STORE_DATA = {
+    "instagram": {"nome": "Instagram", "prezzo": 500, "emoji": "📸", "desc": "Condividi foto e storie con la città."},
+    "tiktok": {"nome": "TikTok", "prezzo": 600, "emoji": "🎵", "desc": "Guarda e pubblica video brevi RP."}
+}
+
+
+# ==========================================
 # COMANDO PRINCIPALE /TELEFONO
 # ==========================================
 @bot.tree.command(name="telefono", description="Apri lo smartphone virtuale di Evren City RP")
 async def telefono(interaction: discord.Interaction):
-    # Defer immediato per prevenire il timeout di 3 secondi
+    # Defer immediato per prevenire il timeout di 3 secondi di Discord
     await interaction.response.defer(ephemeral=True)
     
     user_id = str(interaction.user.id)
@@ -302,7 +319,7 @@ async def telefono(interaction: discord.Interaction):
                 INSERT INTO telefono_sistema (user_id, numero_telefono, email_indirizzo, batteria, app_installate) 
                 VALUES (%s, %s, %s, 100, %s) 
                 ON CONFLICT (user_id) DO NOTHING;
-            """, (user_id, nuovo_numero, nuova_email, apps_default))
+            """, (user_id, nuevo_numero, nuova_email, apps_default))
             conn.commit()
             
             # Rileggiamo subito dal database dopo l'inserimento per sicurezza matematica
@@ -316,7 +333,7 @@ async def telefono(interaction: discord.Interaction):
         conn.close()
 
     except Exception as db_error:
-        print(f"❌ [ERRORE SQL TELEFONO]: {db_error}")
+        print(f"❌ [ERRORE RENDER - SQL TELEFONO]: Fallimento query iniziale. Dettagli: {db_error}")
         return await interaction.followup.send("❌ Errore critico di sincronizzazione con il database della SIM.", ephemeral=True)
 
     # 4. Generazione della schermata grafica
@@ -337,21 +354,27 @@ async def telefono(interaction: discord.Interaction):
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
         
     except Exception as gui_error:
-        print(f"❌ [ERRORE INTERFACCIA TELEFONO]: {gui_error}")
+        print(f"❌ [ERRORE RENDER - INTERFACCIA TELEFONO]: Costruzione bottoni fallita. Dettagli: {gui_error}")
         return await interaction.followup.send("❌ Errore grafico nel caricamento dello schermo.", ephemeral=True)
+
 
 # ==========================================
 # INTERFACCIA HOMESCREEN A GRIGLIA (2 COLONNE)
 # ==========================================
 class SchermataHomeGrigliaView(discord.ui.View):
-    def __init__(self, user_id, apps):
+    # Risolto bug on_ready: aggiunti valori di default =None
+    def __init__(self, user_id=None, apps=None):
         super().__init__(timeout=None)
         self.user_id = user_id
+
+        # Se chiamato da on_ready, interrompe l'esecuzione evitando cicli for su oggetti vuoti
+        if apps is None:
+            return
 
         for index, app_id in enumerate(apps):
             if app_id in INFO_APP_GRIGLIA:
                 dati = INFO_APP_GRIGLIA[app_id]
-                riga_destinazione = index // 2 # Impaginazione a 2 colonne, stabile sia su PC che Mobile
+                riga_destinazione = index // 2 # Impaginazione stabile a 2 colonne PC/Mobile
                 
                 if riga_destinazione > 4: 
                     break
@@ -373,41 +396,44 @@ class BottoneIconaGriglia(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction):
         user_id = str(interaction.user.id)
 
-        if self.app_id == "whatsapp":
-            embed = discord.Embed(title="💬 WhatsApp Messenger", description="Gestisci i tuoi contatti e invia messaggi protetti tramite Modal.", color=discord.Color.green())
-            view = discord.ui.View()
-            view.add_item(BottoneAzioneTelefono("Aggiungi Contatto", "👤", "wa_add_contatto", discord.ButtonStyle.blurple))
-            view.add_item(BottoneAzioneTelefono("Apri Chat", "📖", "wa_apri_chat", discord.ButtonStyle.green))
-            view.add_item(BottoneHome(user_id))
-            await interaction.response.edit_message(embed=embed, view=view)
+        try:
+            if self.app_id == "whatsapp":
+                embed = discord.Embed(title="💬 WhatsApp Messenger", description="Gestisci i tuoi contatti e invia messaggi protetti tramite Modal.", color=discord.Color.green())
+                view = discord.ui.View()
+                view.add_item(BottoneAzioneTelefono("Aggiungi Contatto", "👤", "wa_add_contatto", discord.ButtonStyle.blurple))
+                view.add_item(BottoneAzioneTelefono("Apri Chat", "📖", "wa_apri_chat", discord.ButtonStyle.green))
+                view.add_item(BottoneHome(user_id))
+                await interaction.response.edit_message(embed=embed, view=view)
 
-        elif self.app_id == "email":
-            embed = discord.Embed(title="✉️ Casella di Posta Mail", description="Invia comunicazioni formali ai cittadini di Evren.", color=discord.Color.blue())
-            view = discord.ui.View()
-            view.add_item(BottoneAzioneTelefono("Scrivi Email", "📧", "mail_invia", discord.ButtonStyle.blurple))
-            view.add_item(BottoneHome(user_id))
-            await interaction.response.edit_message(embed=embed, view=view)
+            elif self.app_id == "email":
+                embed = discord.Embed(title="✉️ Casella di Posta Mail", description="Invia comunicazioni formali ai cittadini di Evren.", color=discord.Color.blue())
+                view = discord.ui.View()
+                view.add_item(BottoneAzioneTelefono("Scrivi Email", "📧", "mail_invia", discord.ButtonStyle.blurple))
+                view.add_item(BottoneHome(user_id))
+                await interaction.response.edit_message(embed=embed, view=view)
 
-        elif self.app_id == "instagram":
-            embed = discord.Embed(title="📸 Instagram Social", description="Condividi post e scatti fotografici RP.", color=discord.Color.magenta())
-            view = discord.ui.View()
-            view.add_item(BottoneAzioneTelefono("Crea Post", "🖼️", "ig_post", discord.ButtonStyle.danger))
-            view.add_item(BottoneHome(user_id))
-            await interaction.response.edit_message(embed=embed, view=view)
+            elif self.app_id == "instagram":
+                embed = discord.Embed(title="📸 Instagram Social", description="Condividi post e scatti fotografici RP.", color=discord.Color.magenta())
+                view = discord.ui.View()
+                view.add_item(BottoneAzioneTelefono("Crea Post", "🖼️", "ig_post", discord.ButtonStyle.danger))
+                view.add_item(BottoneHome(user_id))
+                await interaction.response.edit_message(embed=embed, view=view)
 
-        elif self.app_id == "tiktok":
-            embed = discord.Embed(title="🎵 TikTok Evren", description="Carica o guarda clip video della community.", color=discord.Color.dark_theme())
-            view = discord.ui.View()
-            view.add_item(BottoneAzioneTelefono("Carica Video", "🎥", "tt_video", discord.ButtonStyle.secondary))
-            view.add_item(BottoneHome(user_id))
-            await interaction.response.edit_message(embed=embed, view=view)
+            elif self.app_id == "tiktok":
+                embed = discord.Embed(title="🎵 TikTok Evren", description="Carica o guarda clip video della community.", color=discord.Color.dark_theme())
+                view = discord.ui.View()
+                view.add_item(BottoneAzioneTelefono("Carica Video", "🎥", "tt_video", discord.ButtonStyle.secondary))
+                view.add_item(BottoneHome(user_id))
+                await interaction.response.edit_message(embed=embed, view=view)
 
-        elif self.app_id == "appstore":
-            embed = discord.Embed(title="🛍️ App Store", description="Sblocca ed installa nuove applicazioni commerciali.", color=discord.Color.orange())
-            view = discord.ui.View()
-            view.add_item(MenuSelezionaAppStore(user_id))
-            view.add_item(BottoneHome(user_id))
-            await interaction.response.edit_message(embed=embed, view=view)
+            elif self.app_id == "appstore":
+                embed = discord.Embed(title="🛍️ App Store", description="Sblocca ed installa nuove applicazioni commerciali.", color=discord.Color.orange())
+                view = discord.ui.View()
+                view.add_item(MenuSelezionaAppStore(user_id))
+                view.add_item(BottoneHome(user_id))
+                await interaction.response.edit_message(embed=embed, view=view)
+        except Exception as e:
+            print(f"❌ [ERRORE RENDER - CLICK APPLICAZIONE]: Fallito cambio schermata per {self.app_id}. Dettagli: {e}")
 
 
 class BottoneAzioneTelefono(discord.ui.Button):
@@ -416,18 +442,21 @@ class BottoneAzioneTelefono(discord.ui.Button):
         self.azione_id = azione_id
 
     async def callback(self, interaction: discord.Interaction):
-        if self.azione_id == "wa_add_contatto":
-            await interaction.response.send_modal(ModalAggiungiContatto())
-        elif self.azione_id == "wa_apri_chat":
-            await interaction.response.send_modal(ModalApriChatWhatsApp())
-        elif self.azione_id == "mail_invia":
-            await interaction.response.send_modal(ModalEmail())
-        elif self.azione_id in ["ig_post", "tt_video"]:
-            await interaction.response.send_modal(ModalSocial(self.azione_id))
+        try:
+            if self.azione_id == "wa_add_contatto":
+                await interaction.response.send_modal(ModalAggiungiContatto())
+            elif self.azione_id == "wa_apri_chat":
+                await interaction.response.send_modal(ModalApriChatWhatsApp())
+            elif self.azione_id == "mail_invia":
+                await interaction.response.send_modal(ModalEmail())
+            elif self.azione_id in ["ig_post", "tt_video"]:
+                await interaction.response.send_modal(ModalSocial(self.azione_id))
+        except Exception as e:
+            print(f"❌ [ERRORE RENDER - APERTURA MODAL]: Impossibile mostrare il pop-up per {self.azione_id}. Dettagli: {e}")
 
 
 # ==========================================
-# STRUTTURE MODAL (COMPILAZIONE COMPLETA)
+# STRUTTURE MODAL
 # ==========================================
 class ModalAggiungiContatto(discord.ui.Modal, title="Rubrica - Salva Contatto"):
     nome = discord.ui.TextInput(label="Nome Contatto RP", placeholder="Es: Mario Rossi")
@@ -435,27 +464,30 @@ class ModalAggiungiContatto(discord.ui.Modal, title="Rubrica - Salva Contatto"):
 
     async def on_submit(self, interaction: discord.Interaction):
         user_id = str(interaction.user.id)
-        conn = psycopg2.connect(DB_CON)
-        cur = conn.cursor()
+        try:
+            conn = psycopg2.connect(DB_CON)
+            cur = conn.cursor()
 
-        cur.execute("SELECT user_id FROM telefono_sistema WHERE numero_telefono = %s;", (str(self.numero.value),))
-        res = cur.fetchone()
+            cur.execute("SELECT user_id FROM telefono_sistema WHERE numero_telefono = %s;", (str(self.numero.value),))
+            res = cur.fetchone()
 
-        if not res:
+            if not res:
+                cur.close()
+                conn.close()
+                return await interaction.response.send_message("❌ Questo numero non esiste sulla rete telefonica.", ephemeral=True)
+
+            contatto_id = res[0]
+            cur.execute("""
+                INSERT INTO telefono_contatti (user_id, contatto_id, nome_salvato) 
+                VALUES (%s, %s, %s) ON CONFLICT (user_id, contatto_id) DO UPDATE SET nome_salvato = EXCLUDED.nome_salvato;
+            """, (user_id, contatto_id, str(self.nome.value)))
+            conn.commit()
             cur.close()
             conn.close()
-            return await interaction.response.send_message("❌ Questo numero non esiste sulla rete telefonica.", ephemeral=True)
 
-        contatto_id = res[0]
-        cur.execute("""
-            INSERT INTO telefono_contatti (user_id, contatto_id, nome_salvato) 
-            VALUES (%s, %s, %s) ON CONFLICT (user_id, contatto_id) DO UPDATE SET nome_salvato = EXCLUDED.nome_salvato;
-        """, (user_id, contatto_id, str(self.nome.value)))
-        conn.commit()
-        cur.close()
-        conn.close()
-
-        await interaction.response.send_message(f"👤 Salva in rubrica: `{self.nome.value}`!", ephemeral=True)
+            await interaction.response.send_message(f"👤 Salva in rubrica: `{self.nome.value}`!", ephemeral=True)
+        except Exception as e:
+            print(f"❌ [ERRORE RENDER - MODAL CONTATTI]: Errore durante il salvataggio in rubrica. Dettagli: {e}")
 
 
 class ModalApriChatWhatsApp(discord.ui.Modal, title="WhatsApp - Carica Chat"):
@@ -465,59 +497,62 @@ class ModalApriChatWhatsApp(discord.ui.Modal, title="WhatsApp - Carica Chat"):
         user_id = str(interaction.user.id)
         input_data = str(self.info_contatto.value)
 
-        conn = psycopg2.connect(DB_CON)
-        cur = conn.cursor()
+        try:
+            conn = psycopg2.connect(DB_CON)
+            cur = conn.cursor()
 
-        if "-" in input_data:
-            cur.execute("SELECT user_id FROM telefono_sistema WHERE numero_telefono = %s;", (input_data,))
-            res_target = cur.fetchone()
-            target_id = res_target[0] if res_target else None
-        else:
-            target_id = input_data
+            if "-" in input_data:
+                cur.execute("SELECT user_id FROM telefono_sistema WHERE numero_telefono = %s;", (input_data,))
+                res_target = cur.fetchone()
+                target_id = res_target[0] if res_target else None
+            else:
+                target_id = input_data
 
-        if not target_id:
+            if not target_id:
+                cur.close()
+                conn.close()
+                return await interaction.response.send_message("❌ Utente non registrato sulla rete.", ephemeral=True)
+
+            cur.execute("SELECT nome_salvato FROM telefono_contatti WHERE user_id = %s AND contatto_id = %s;", (user_id, target_id))
+            res_nome = cur.fetchone()
+            nome_visualizzato = res_nome[0] if res_nome else f"Sconosciuto ({target_id})"
+
+            cur.execute("UPDATE telefono_chat SET letto = TRUE WHERE sender_id = %s AND receiver_id = %s;", (target_id, user_id))
+            conn.commit()
+
+            cur.execute("""
+                SELECT sender_id, messaggio, letto, data_invio 
+                FROM telefono_chat 
+                WHERE (sender_id = %s AND receiver_id = %s) OR (sender_id = %s AND receiver_id = %s)
+                ORDER BY data_invio DESC LIMIT 20;
+            """, (user_id, target_id, target_id, user_id))
+            
+            messaggi = cur.fetchall()
             cur.close()
             conn.close()
-            return await interaction.response.send_message("❌ Utente non registrato sulla rete.", ephemeral=True)
 
-        cur.execute("SELECT nome_salvato FROM telefono_contatti WHERE user_id = %s AND contatto_id = %s;", (user_id, target_id))
-        res_nome = cur.fetchone()
-        nome_visualizzato = res_nome[0] if res_nome else f"Sconosciuto ({target_id})"
+            embed = discord.Embed(title=f"💬 Chat con: {nome_visualizzato}", color=discord.Color.green())
 
-        cur.execute("UPDATE telefono_chat SET letto = TRUE WHERE sender_id = %s AND receiver_id = %s;", (target_id, user_id))
-        conn.commit()
+            if not messaggi:
+                embed.description = "*Cronologia vuota.*"
+            else:
+                testo_chat = ""
+                for msg in reversed(messaggi):
+                    sender, testo, letto, data = msg
+                    ora = data.strftime("%H:%M")
+                    if sender == user_id:
+                        spunta = " `✔️✔️`" if letto else " `✔️`"
+                        testo_chat += f"🟢 **Tu** [{ora}]: {testo}{spunta}\n"
+                    else:
+                        testo_chat += f"⚪ **{nome_visualizzato}** [{ora}]: {testo}\n"
+                embed.description = f"📦 **Cronologia Chat:**\n\n{testo_chat}"
 
-        cur.execute("""
-            SELECT sender_id, messaggio, letto, data_invio 
-            FROM telefono_chat 
-            WHERE (sender_id = %s AND receiver_id = %s) OR (sender_id = %s AND receiver_id = %s)
-            ORDER BY data_invio DESC LIMIT 20;
-        """, (user_id, target_id, target_id, user_id))
-        
-        messaggi = cur.fetchall()
-        cur.close()
-        conn.close()
-
-        embed = discord.Embed(title=f"💬 Chat con: {nome_visualizzato}", color=discord.Color.green())
-
-        if not messaggi:
-            embed.description = "*Cronologia vuota.*"
-        else:
-            testo_chat = ""
-            for msg in reversed(messaggi):
-                sender, testo, letto, data = msg
-                ora = data.strftime("%H:%M")
-                if sender == user_id:
-                    spunta = " `✔️✔️`" if letto else " `✔️`"
-                    testo_chat += f"🟢 **Tu** [{ora}]: {testo}{spunta}\n"
-                else:
-                    testo_chat += f"⚪ **{nome_visualizzato}** [{ora}]: {testo}\n"
-            embed.description = f"📦 **Cronologia Chat:**\n\n{testo_chat}"
-
-        view = discord.ui.View()
-        view.add_item(BottoneInviaMessaggioRapido(target_id, nome_visualizzato))
-        view.add_item(BottoneHome(user_id))
-        await interaction.response.edit_message(embed=embed, view=view)
+            view = discord.ui.View()
+            view.add_item(BottoneInviaMessaggioRapido(target_id, nome_visualizzato))
+            view.add_item(BottoneHome(user_id))
+            await interaction.response.edit_message(embed=embed, view=view)
+        except Exception as e:
+            print(f"❌ [ERRORE RENDER - MODAL WHATSAPP]: Errore caricamento o rendering storico chat. Dettagli: {e}")
 
 
 class BottoneInviaMessaggioRapido(discord.ui.Button):
@@ -543,20 +578,24 @@ class ModalRispostaWhatsApp(discord.ui.Modal):
         mittente_id = str(interaction.user.id)
         testo = str(self.msg.value)
 
-        conn = psycopg2.connect(DB_CON)
-        cur = conn.cursor()
-        cur.execute("INSERT INTO telefono_chat (sender_id, receiver_id, messaggio, letto) VALUES (%s, %s, %s, FALSE);", (mittente_id, self.target_id, testo))
-        conn.commit()
-        cur.close()
-        conn.close()
-
         try:
-            target_user = await interaction.client.fetch_user(int(self.target_id))
-            embed_dm = discord.Embed(title="💬 WhatsApp RP", description=f"**Nuovo messaggio da <@{mittente_id}>:**\n\n> {testo}", color=discord.Color.green())
-            await target_user.send(embed=embed_dm)
-        except:
-            pass
-        await interaction.followup.send(f"✔️ Inviato a {self.nome_visualizzato}!", ephemeral=True)
+            conn = psycopg2.connect(DB_CON)
+            cur = conn.cursor()
+            cur.execute("INSERT INTO telefono_chat (sender_id, receiver_id, messaggio, letto) VALUES (%s, %s, %s, FALSE);", (mittente_id, self.target_id, testo))
+            conn.commit()
+            cur.close()
+            conn.close()
+
+            try:
+                target_user = await interaction.client.fetch_user(int(self.target_id))
+                embed_dm = discord.Embed(title="💬 WhatsApp RP", description=f"**Nuovo messaggio da <@{mittente_id}>:**\n\n> {testo}", color=discord.Color.green())
+                await target_user.send(embed=embed_dm)
+            except Exception as dm_err:
+                print(f"⚠️ [AVVISO DM TELEFONO]: Impossibile inviare notifica privata all'utente {self.target_id}: {dm_err}")
+                
+            await interaction.followup.send(f"✔️ Inviato a {self.nome_visualizzato}!", ephemeral=True)
+        except Exception as e:
+            print(f"❌ [ERRORE RENDER - INVIO MESSAGGIO]: Fallito inserimento del testo nel db delle chat. Dettagli: {e}")
 
 
 class ModalEmail(discord.ui.Modal, title="Mail client - Invia Email"):
@@ -565,7 +604,19 @@ class ModalEmail(discord.ui.Modal, title="Mail client - Invia Email"):
     corpo = discord.ui.TextInput(label="Corpo", style=discord.TextStyle.paragraph)
 
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.send_message(f"📧 Mail inviata correttamente a `{self.dest_mail.value}`!", ephemeral=True)
+        try:
+            # Salvataggio logico della mail nel database
+            conn = psycopg2.connect(DB_CON)
+            cur = conn.cursor()
+            cur.execute("INSERT INTO telefono_email (mittente_email, destinatario_email, oggetto, messaggio) VALUES (%s, %s, %s, %s);", 
+                        (f"user_{interaction.user.id}@evren.city", str(self.dest_mail.value), str(self.oggetto.value), str(self.corpo.value)))
+            conn.commit()
+            cur.close()
+            conn.close()
+            
+            await interaction.response.send_message(f"📧 Mail inviata correttamente a `{self.dest_mail.value}`!", ephemeral=True)
+        except Exception as e:
+            print(f"❌ [ERRORE RENDER - EMAIL]: Invio email fallito. Dettagli: {e}")
 
 
 class ModalSocial(discord.ui.Modal, title="Condividi sui Social"):
@@ -577,12 +628,15 @@ class ModalSocial(discord.ui.Modal, title="Condividi sui Social"):
         self.tipo = tipo
 
     async def on_submit(self, interaction: discord.Interaction):
-        piattaforma = "Instagram 📸" if self.tipo == "ig_post" else "TikTok 🎵"
-        colore = discord.Color.magenta() if self.tipo == "ig_post" else discord.Color.default()
-        embed = discord.Embed(title=f"📱 Feed {piattaforma}", description=f"**Profilo: {interaction.user.mention}**\n\n{self.contenuto.value}", color=colore)
-        if self.media_url.value:
-            embed.set_image(url=self.media_url.value)
-        await interaction.response.send_message(embed=embed)
+        try:
+            piattaforma = "Instagram 📸" if self.tipo == "ig_post" else "TikTok 🎵"
+            colore = discord.Color.magenta() if self.tipo == "ig_post" else discord.Color.default()
+            embed = discord.Embed(title=f"📱 Feed {piattaforma}", description=f"**Profilo: {interaction.user.mention}**\n\n{self.contenuto.value}", color=colore)
+            if self.media_url.value:
+                embed.set_image(url=self.media_url.value)
+            await interaction.response.send_message(embed=embed)
+        except Exception as e:
+            print(f"❌ [ERRORE RENDER - MODAL SOCIAL]: Pubblicazione embed social interrotta. Dettagli: {e}")
 
 
 # ==========================================
@@ -602,33 +656,36 @@ class MenuSelezionaAppStore(discord.ui.Select):
         info = APP_STORE_DATA[app_scelta]
         costo = info["prezzo"]
 
-        conn = psycopg2.connect(DB_CON)
-        cur = conn.cursor()
+        try:
+            conn = psycopg2.connect(DB_CON)
+            cur = conn.cursor()
 
-        cur.execute("SELECT app_installate FROM telefono_sistema WHERE user_id = %s;", (self.user_id,))
-        apps = cur.fetchone()[0]
+            cur.execute("SELECT app_installate FROM telefono_sistema WHERE user_id = %s;", (self.user_id,))
+            apps = cur.fetchone()[0]
 
-        if app_scelta in apps:
+            if app_scelta in apps:
+                cur.close()
+                conn.close()
+                return await interaction.response.send_message(f"❌ {info['nome']} è già sul tuo smartphone.", ephemeral=True)
+
+            cur.execute("SELECT bank FROM users WHERE user_id = %s;", (self.user_id,))
+            res_bank = cur.fetchone()
+            saldo_banca = res_bank[0] if res_bank else 0
+
+            if saldo_banca < costo:
+                cur.close()
+                conn.close()
+                return await interaction.response.send_message(f"❌ Fondi bancari insufficienti.", ephemeral=True)
+
+            cur.execute("UPDATE users SET bank = bank - %s WHERE user_id = %s;", (costo, self.user_id))
+            cur.execute("UPDATE telefono_sistema SET app_installate = array_append(app_installate, %s) WHERE user_id = %s;", (app_scelta, self.user_id))
+            conn.commit()
             cur.close()
             conn.close()
-            return await interaction.response.send_message(f"❌ {info['nome']} è già sul tuo smartphone.", ephemeral=True)
 
-        cur.execute("SELECT bank FROM users WHERE user_id = %s;", (self.user_id,))
-        res_bank = cur.fetchone()
-        saldo_banca = res_bank[0] if res_bank else 0
-
-        if saldo_banca < costo:
-            cur.close()
-            conn.close()
-            return await interaction.response.send_message(f"❌ Fondi bancari insufficienti.", ephemeral=True)
-
-        cur.execute("UPDATE users SET bank = bank - %s WHERE user_id = %s;", (costo, self.user_id))
-        cur.execute("UPDATE telefono_sistema SET app_installate = array_append(app_installate, %s) WHERE user_id = %s;", (app_scelta, self.user_id))
-        conn.commit()
-        cur.close()
-        conn.close()
-
-        await interaction.response.send_message(f"📥 Installata: **{info['nome']}**!", ephemeral=True)
+            await interaction.response.send_message(f"📥 Installata: **{info['nome']}**!", ephemeral=True)
+        except Exception as e:
+            print(f"❌ [ERRORE RENDER - APP STORE]: Transazione monetaria o download app fallito. Dettagli: {e}")
 
 
 class BottoneHome(discord.ui.Button):
@@ -637,26 +694,29 @@ class BottoneHome(discord.ui.Button):
         self.user_id = user_id
 
     async def callback(self, interaction: discord.Interaction):
-        conn = psycopg2.connect(DB_CON)
-        cur = conn.cursor()
-        cur.execute("SELECT numero_telefono, email_indirizzo, batteria, app_installate FROM telefono_sistema WHERE user_id = %s;", (self.user_id,))
-        numero, email, batteria, apps = cur.fetchone()
-        cur.close()
-        conn.close()
+        try:
+            conn = psycopg2.connect(DB_CON)
+            cur = conn.cursor()
+            cur.execute("SELECT numero_telefono, email_indirizzo, batteria, app_installate FROM telefono_sistema WHERE user_id = %s;", (self.user_id,))
+            numero, email, batteria, apps = cur.fetchone()
+            cur.close()
+            conn.close()
 
-        embed = discord.Embed(
-            title="📱 EVREN OS v14.2",
-            description=f"🔋 **Batteria:** {batteria}%  |  📶 **Rete:** Evren 5G\n"
-                        f"─────────────────────────────\n"
-                        f"👤 **Utente:** {interaction.user.mention}\n"
-                        f"📞 **Numero:** `{numero}`\n"
-                        f"✉️ **Indirizzo:** `{email}`\n"
-                        f"─────────────────────────────\n"
-                        f"👇 *Tocca un'applicazione per aprirla* 👇",
-            color=discord.Color.from_rgb(47, 49, 54)
-        )
+            embed = discord.Embed(
+                title="📱 EVREN OS v14.2",
+                description=f"🔋 **Batteria:** {batteria}%  |  📶 **Rete:** Evren 5G\n"
+                            f"─────────────────────────────\n"
+                            f"👤 **Utente:** {interaction.user.mention}\n"
+                            f"📞 **Numero:** `{numero}`\n"
+                            f"✉️ **Indirizzo:** `{email}`\n"
+                            f"─────────────────────────────\n"
+                            f"👇 *Tocca un'applicazione per aprirla* 👇",
+                color=discord.Color.from_rgb(47, 49, 54)
+            )
 
-        await interaction.response.edit_message(embed=embed, view=SchermataHomeGrigliaView(self.user_id, apps))
+            await interaction.response.edit_message(embed=embed, view=SchermataHomeGrigliaView(self.user_id, apps))
+        except Exception as e:
+            print(f"❌ [ERRORE RENDER - BACK TO HOME]: Impossibile rientrare alla home del telefono. Dettagli: {e}")
 
 import discord
 from discord import app_commands
