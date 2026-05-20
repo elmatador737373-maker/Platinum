@@ -271,6 +271,105 @@ async def mostra_patente(interaction: discord.Interaction):
         embed.set_thumbnail(url=doc[3])
 
     await interaction.response.send_message(embed=embed)
+class BottoneAzioneTelefono(discord.ui.Button):
+    def __init__(self, label, emoji, azione_id, style):
+        super().__init__(label=label, emoji=emoji, style=style)
+        self.azione_id = azione_id
+
+    async def callback(self, interaction: discord.Interaction):
+        user_id = str(interaction.user.id)
+                # Registrazione profilo Social
+        if self.azione_id.startswith("social_reg_"):
+            piattaforma = self.azione_id.replace("social_reg_", "")
+            return await interaction.response.send_modal(ModalRegistrazioneSocial(piattaforma))
+
+        # Apertura Modal di pubblicazione reale
+        elif self.azione_id.startswith("social_pub_"):
+            piattaforma = self.azione_id.replace("social_pub_", "")
+            return await interaction.response.send_modal(ModalEngineIniezioneSocialReale(piattaforma))
+
+        # Caricamento dinamico del Feed con sistema di Like itinerante
+        elif self.azione_id.startswith("social_feed_"):
+            await interaction.response.defer()
+            piattaforma = self.azione_id.replace("social_feed_", "")
+            colore = discord.Color.magenta() if piattaforma == "instagram" else discord.Color.purple()
+            
+            conn = get_db_connection(); cur = conn.cursor()
+            cur.execute("""
+                SELECT p.post_id, pr.username_social, p.descrizione, p.media_url, 
+                       (SELECT COUNT(*) FROM social_likes WHERE post_id = p.post_id) as likes
+                FROM social_posts p
+                JOIN social_profili pr ON p.autore_id = pr.user_id
+                WHERE p.tipo_piattaforma = %s ORDER BY p.data_pubblicazione DESC LIMIT 1;
+            """, (piattaforma,))
+            post = cur.fetchone()
+            cur.close(); conn.close()
+
+            if not post:
+                return await interaction.followup.send("⚠️ Nessun post presente su questa piattaforma al momento.", ephemeral=True)
+
+            p_id, autore, desc, url, likes = post
+            embed = discord.Embed(title=f"📱 Feed Globale - @{autore}", description=f"{desc}\n\n❤️ **Like:** {likes}", color=colore)
+            if url and url.startswith("http"):
+                embed.set_image(url=url)
+
+            view = discord.ui.View()
+            view.add_item(BottoneMettiLike(p_id, user_id, self.azione_id)) # Bottone per il mi piace
+            view.add_item(BottoneRitornoHome(user_id))
+            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+
+        if self.azione_id == "wa_add_contatto":
+            await interaction.response.send_modal(ModalAggiungiContatto())
+            
+        elif self.azione_id == "mail_invia":
+            await interaction.response.send_modal(ModalEmail())
+            
+        elif self.azione_id == "mail_inbox":
+            await interaction.response.defer()
+            conn = get_db_connection()
+            if not conn:
+                return await interaction.followup.send("❌ Errore di connessione.", ephemeral=True)
+            
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT email_indirizzo FROM telefono_sistema WHERE user_id = %s;", (user_id,))
+                mia_mail = cur.fetchone()[0]
+
+                cur.execute("SELECT mittente_email, oggetto, messaggio, data_invio FROM telefono_email WHERE destinatario_email = %s ORDER BY data_invio DESC LIMIT 5;", (mia_mail,))
+                ricevute = cur.fetchall()
+                
+                embed = discord.Embed(title="📥 Posta in Arrivo", color=discord.Color.blue())
+                if not ricevute:
+                    embed.description = "*Nessuna email presente nella tua casella postale.*"
+                else:
+                    corpo = ""
+                    for mail in ricevute:
+                        mit, ogg, msg, data = mail
+                        corpo += f"✉️ **Da:** `{mit}`\n📌 **Oggetto:** *{ogg}*\n> {msg}\n*Ricevuta il: {data.strftime('%d/%m %H:%M')}*\n──────────────────\n"
+                    embed.description = corpo
+                
+                view = discord.ui.View()
+                view.add_item(BottoneHome(user_id))
+                await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+            except Exception as e:
+                print(e)
+            finally:
+                cur.close()
+                conn.close()
+
+        elif self.azione_id == "set_ricarica":
+            conn = get_db_connection()
+            if conn:
+                cur = conn.cursor()
+                cur.execute("UPDATE telefono_sistema SET batteria = 100 WHERE user_id = %s;", (user_id,))
+                conn.commit()
+                cur.close()
+                conn.close()
+            await interaction.response.send_message("⚡ Dispositivo ricaricato al 100%!", ephemeral=True)
+            
+        elif self.azione_id in ["ig_post", "tt_video"]:
+            await interaction.response.send_modal(ModalSocial(self.azione_id))
+
 
 # ==========================================
 # CONFIGURAZIONE STRUTTURE DATI TELEFONO
@@ -486,105 +585,6 @@ class BottoneIconaGriglia(discord.ui.Button):
             await interaction.response.edit_message(embed=embed, view=view)
 
 
-
-class BottoneAzioneTelefono(discord.ui.Button):
-    def __init__(self, label, emoji, azione_id, style):
-        super().__init__(label=label, emoji=emoji, style=style)
-        self.azione_id = azione_id
-
-    async def callback(self, interaction: discord.Interaction):
-        user_id = str(interaction.user.id)
-                # Registrazione profilo Social
-        if self.azione_id.startswith("social_reg_"):
-            piattaforma = self.azione_id.replace("social_reg_", "")
-            return await interaction.response.send_modal(ModalRegistrazioneSocial(piattaforma))
-
-        # Apertura Modal di pubblicazione reale
-        elif self.azione_id.startswith("social_pub_"):
-            piattaforma = self.azione_id.replace("social_pub_", "")
-            return await interaction.response.send_modal(ModalEngineIniezioneSocialReale(piattaforma))
-
-        # Caricamento dinamico del Feed con sistema di Like itinerante
-        elif self.azione_id.startswith("social_feed_"):
-            await interaction.response.defer()
-            piattaforma = self.azione_id.replace("social_feed_", "")
-            colore = discord.Color.magenta() if piattaforma == "instagram" else discord.Color.purple()
-            
-            conn = get_db_connection(); cur = conn.cursor()
-            cur.execute("""
-                SELECT p.post_id, pr.username_social, p.descrizione, p.media_url, 
-                       (SELECT COUNT(*) FROM social_likes WHERE post_id = p.post_id) as likes
-                FROM social_posts p
-                JOIN social_profili pr ON p.autore_id = pr.user_id
-                WHERE p.tipo_piattaforma = %s ORDER BY p.data_pubblicazione DESC LIMIT 1;
-            """, (piattaforma,))
-            post = cur.fetchone()
-            cur.close(); conn.close()
-
-            if not post:
-                return await interaction.followup.send("⚠️ Nessun post presente su questa piattaforma al momento.", ephemeral=True)
-
-            p_id, autore, desc, url, likes = post
-            embed = discord.Embed(title=f"📱 Feed Globale - @{autore}", description=f"{desc}\n\n❤️ **Like:** {likes}", color=colore)
-            if url and url.startswith("http"):
-                embed.set_image(url=url)
-
-            view = discord.ui.View()
-            view.add_item(BottoneMettiLike(p_id, user_id, self.azione_id)) # Bottone per il mi piace
-            view.add_item(BottoneRitornoHome(user_id))
-            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
-
-        if self.azione_id == "wa_add_contatto":
-            await interaction.response.send_modal(ModalAggiungiContatto())
-            
-        elif self.azione_id == "mail_invia":
-            await interaction.response.send_modal(ModalEmail())
-            
-        elif self.azione_id == "mail_inbox":
-            await interaction.response.defer()
-            conn = get_db_connection()
-            if not conn:
-                return await interaction.followup.send("❌ Errore di connessione.", ephemeral=True)
-            
-            try:
-                cur = conn.cursor()
-                cur.execute("SELECT email_indirizzo FROM telefono_sistema WHERE user_id = %s;", (user_id,))
-                mia_mail = cur.fetchone()[0]
-
-                cur.execute("SELECT mittente_email, oggetto, messaggio, data_invio FROM telefono_email WHERE destinatario_email = %s ORDER BY data_invio DESC LIMIT 5;", (mia_mail,))
-                ricevute = cur.fetchall()
-                
-                embed = discord.Embed(title="📥 Posta in Arrivo", color=discord.Color.blue())
-                if not ricevute:
-                    embed.description = "*Nessuna email presente nella tua casella postale.*"
-                else:
-                    corpo = ""
-                    for mail in ricevute:
-                        mit, ogg, msg, data = mail
-                        corpo += f"✉️ **Da:** `{mit}`\n📌 **Oggetto:** *{ogg}*\n> {msg}\n*Ricevuta il: {data.strftime('%d/%m %H:%M')}*\n──────────────────\n"
-                    embed.description = corpo
-                
-                view = discord.ui.View()
-                view.add_item(BottoneHome(user_id))
-                await interaction.followup.send(embed=embed, view=view, ephemeral=True)
-            except Exception as e:
-                print(e)
-            finally:
-                cur.close()
-                conn.close()
-
-        elif self.azione_id == "set_ricarica":
-            conn = get_db_connection()
-            if conn:
-                cur = conn.cursor()
-                cur.execute("UPDATE telefono_sistema SET batteria = 100 WHERE user_id = %s;", (user_id,))
-                conn.commit()
-                cur.close()
-                conn.close()
-            await interaction.response.send_message("⚡ Dispositivo ricaricato al 100%!", ephemeral=True)
-            
-        elif self.azione_id in ["ig_post", "tt_video"]:
-            await interaction.response.send_modal(ModalSocial(self.azione_id))
 
 
 # ==========================================
