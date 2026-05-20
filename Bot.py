@@ -298,6 +298,10 @@ DIZIONARIO_COLORI = {
     "Oro": discord.Color.gold()
 }
 
+# Alias di sicurezza per accoppiare i due nomi ed evitare errori di mancata definizione
+class BottoneAzioneSistema(BottoneAzioneTelefono):
+    pass
+
 # ==========================================
 # COMANDO PRINCIPALE /TELEFONO
 # ==========================================
@@ -437,18 +441,42 @@ class BottoneIconaGriglia(discord.ui.Button):
             view.add_item(BottoneAzioneTelefono("Ricarica Dispositivo (100%)", "⚡", "set_ricarica", discord.ButtonStyle.green))
             view.add_item(BottoneHome(user_id))
             await interaction.response.edit_message(embed=embed, view=view)
+        elif self.app_id in ["instagram", "tiktok"]:
+            piattaforma = self.app_id
+            nome_social = "Instagram 📸" if piattaforma == "instagram" else "TikTok 🎵"
+            colore = discord.Color.magenta() if piattaforma == "instagram" else discord.Color.purple()
+            
+            # Controllo esistenza profilo social
+            conn = get_db_connection(); cur = conn.cursor()
+            cur.execute("SELECT username_social FROM social_profili WHERE user_id = %s;", (user_id,))
+            profilo = cur.fetchone()
+            cur.close(); conn.close()
 
-        elif self.app_id in ["instagram", "tiktok", "appstore"]:
-            # Lasciamo intatti i comportamenti originali per le app social/store
-            if self.app_id == "instagram":
-                embed = discord.Embed(title="📸 Instagram Social", description="Condividi post e scatti fotografici RP.", color=discord.Color.magenta())
+            if not profilo:
+                embed = discord.Embed(
+                    title=nome_social, 
+                    description="👋 Benvenuto sulla rete! Non hai ancora configurato un account su questa piattaforma.\n\n"
+                                "👉 *Clicca il bottone sotto per inizializzare il tuo profilo pubblico.*", 
+                    color=colore
+                )
                 view = discord.ui.View()
-                view.add_item(BottoneAzioneTelefono("Crea Post", "🖼️", "ig_post", discord.ButtonStyle.danger))
-            elif self.app_id == "tiktok":
-                embed = discord.Embed(title="🎵 TikTok Evren", description="Carica o guarda clip video della community.", color=discord.Color.dark_theme())
-                view = discord.ui.View()
-                view.add_item(BottoneAzioneTelefono("Carica Video", "🎥", "tt_video", discord.ButtonStyle.secondary))
-            elif self.app_id == "appstore":
+                view.add_item(BottoneAzioneSistema(f"Registra Account", "🆔", f"social_reg_{piattaforma}", discord.ButtonStyle.blurple))
+                view.add_item(BottoneRitornoHome(user_id))
+                return await interaction.response.edit_message(embed=embed, view=view)
+
+            # Se il profilo esiste, mostra la Dashboard dell'app
+            embed = discord.Embed(
+                title=f"{nome_social} - @{profilo[0]}", 
+                description=f"Benvenuto nella tua area personale di {nome_social}.\n\n"
+                            f"📝 Puoi pubblicare un nuovo contenuto o sfogliare gli ultimi post della città registrati nel database.", 
+                color=colore
+            )
+            view = discord.ui.View()
+            view.add_item(BottoneAzioneSistema("Pubblica Contenuto", "➕", f"social_pub_{piattaforma}", discord.ButtonStyle.success))
+            view.add_item(BottoneAzioneSistema("Sfoglia Feed Globale", "👀", f"social_feed_{piattaforma}", discord.ButtonStyle.primary))
+            view.add_item(BottoneRitornoHome(user_id))
+            await interaction.response.edit_message(embed=embed, view=view)
+        elif self.app_id == "appstore":
                 embed = discord.Embed(title="🛍️ App Store", description="Sblocca ed installa nuove applicazioni commerciali.", color=discord.Color.orange())
                 view = discord.ui.View()
                 view.add_item(MenuSelezionaAppStore(user_id))
@@ -463,7 +491,46 @@ class BottoneAzioneTelefono(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction):
         user_id = str(interaction.user.id)
-        
+                # Registrazione profilo Social
+        if self.azione_id.startswith("social_reg_"):
+            piattaforma = self.azione_id.replace("social_reg_", "")
+            return await interaction.response.send_modal(ModalRegistrazioneSocial(piattaforma))
+
+        # Apertura Modal di pubblicazione reale
+        elif self.azione_id.startswith("social_pub_"):
+            piattaforma = self.azione_id.replace("social_pub_", "")
+            return await interaction.response.send_modal(ModalEngineIniezioneSocialReale(piattaforma))
+
+        # Caricamento dinamico del Feed con sistema di Like itinerante
+        elif self.azione_id.startswith("social_feed_"):
+            await interaction.response.defer()
+            piattaforma = self.azione_id.replace("social_feed_", "")
+            colore = discord.Color.magenta() if piattaforma == "instagram" else discord.Color.purple()
+            
+            conn = get_db_connection(); cur = conn.cursor()
+            cur.execute("""
+                SELECT p.post_id, pr.username_social, p.descrizione, p.media_url, 
+                       (SELECT COUNT(*) FROM social_likes WHERE post_id = p.post_id) as likes
+                FROM social_posts p
+                JOIN social_profili pr ON p.autore_id = pr.user_id
+                WHERE p.tipo_piattaforma = %s ORDER BY p.data_pubblicazione DESC LIMIT 1;
+            """, (piattaforma,))
+            post = cur.fetchone()
+            cur.close(); conn.close()
+
+            if not post:
+                return await interaction.followup.send("⚠️ Nessun post presente su questa piattaforma al momento.", ephemeral=True)
+
+            p_id, autore, desc, url, likes = post
+            embed = discord.Embed(title=f"📱 Feed Globale - @{autore}", description=f"{desc}\n\n❤️ **Like:** {likes}", color=colore)
+            if url and url.startswith("http"):
+                embed.set_image(url=url)
+
+            view = discord.ui.View()
+            view.add_item(BottoneMettiLike(p_id, user_id, self.azione_id)) # Bottone per il mi piace
+            view.add_item(BottoneRitornoHome(user_id))
+            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+
         if self.azione_id == "wa_add_contatto":
             await interaction.response.send_modal(ModalAggiungiContatto())
             
@@ -822,6 +889,69 @@ class BottoneHome(discord.ui.Button):
         finally:
             cur.close()
             conn.close()
+
+# Modal per creare l'account unico nel database dei social
+class ModalRegistrazioneSocial(discord.ui.Modal, title="Crea Profilo Social"):
+    username = discord.ui.TextInput(label="Scegli il tuo @Username (Senza spazi)", placeholder="Es: super_mario")
+    bio = discord.ui.TextInput(label="Biografia Profilo", style=discord.TextStyle.paragraph, default="Cittadino di Evren City.", max_length=150)
+
+    def __init__(self, piattaforma):
+        super().__init__()
+        self.piattaforma = piattaforma
+
+    async def on_submit(self, interaction: discord.Interaction):
+        user_id = str(interaction.user.id)
+        clean_user = str(self.username.value).strip().replace(" ", "_").lower()
+
+        conn = get_db_connection(); cur = conn.cursor()
+        try:
+            cur.execute("INSERT INTO social_profili (user_id, username_social, biografia) VALUES (%s, %s, %s) ON CONFLICT (user_id) DO NOTHING;", (user_id, clean_user, str(self.bio.value)))
+            conn.commit()
+            await interaction.response.send_message(f"✅ Account creato! Ora sei registrato come **@{clean_user}**. Riapri l'applicazione per vedere la tua bacheca.", ephemeral=True)
+        except psycopg2.errors.UniqueViolation:
+            await interaction.response.send_message("❌ Questo @Username è già stato preso da un altro cittadino.", ephemeral=True)
+        finally:
+            cur.close(); conn.close()
+
+# Modal per salvare il Post reale dentro il Database
+class ModalEngineIniezioneSocialReale(discord.ui.Modal, title="Crea Nuovo Contenuto"):
+    desc = discord.ui.TextInput(label="Didascalia del post", style=discord.TextStyle.paragraph, placeholder="Cosa stai combinando in città?")
+    url = discord.ui.TextInput(label="Link Foto/Video (URL Allegato)", required=False, placeholder="https://imgur.com/...")
+
+    def __init__(self, piattaforma):
+        super().__init__()
+        self.piattaforma = piattaforma
+
+    async def on_submit(self, interaction: discord.Interaction):
+        user_id = str(interaction.user.id)
+        conn = get_db_connection(); cur = conn.cursor()
+        cur.execute("INSERT INTO social_posts (autore_id, tipo_piattaforma, descrizione, media_url) VALUES (%s, %s, %s, %s);", 
+                    (user_id, self.piattaforma, str(self.desc.value), str(self.url.value) if self.url.value else None))
+        conn.commit(); cur.close(); conn.close()
+        await interaction.response.send_message(f"✨ Il tuo contenuto è stato pubblicato sul database di {self.piattaforma}!", ephemeral=True)
+
+# Bottone Interattivo per inserire o rimuovere il Like dal Database
+class BottoneMettiLike(discord.ui.Button):
+    def __init__(self, post_id, user_id, backup_azione):
+        super().__init__(label="Lascia un Like", emoji="❤️", style=discord.ButtonStyle.danger)
+        self.post_id = post_id
+        self.user_id = user_id
+        self.backup_azione = backup_azione
+
+    async def callback(self, interaction: discord.Interaction):
+        conn = get_db_connection(); cur = conn.cursor()
+        cur.execute("SELECT 1 FROM social_likes WHERE user_id = %s AND post_id = %s;", (self.user_id, self.post_id))
+        esiste = cur.fetchone()
+
+        if esiste:
+            cur.execute("DELETE FROM social_likes WHERE user_id = %s AND post_id = %s;", (self.user_id, self.post_id))
+            msg = "💔 Hai rimosso il tuo Like da questo post."
+        else:
+            cur.execute("INSERT INTO social_likes (user_id, post_id) VALUES (%s, %s);", (self.user_id, self.post_id))
+            msg = "❤️ Hai aggiunto un Like a questo post!"
+        
+        conn.commit(); cur.close(); conn.close()
+        await interaction.response.send_message(msg, ephemeral=True)
 
 import discord
 from discord import app_commands
