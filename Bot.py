@@ -294,49 +294,50 @@ APP_STORE_DATA = {
 # ==========================================
 @bot.tree.command(name="telefono", description="Apri lo smartphone virtuale di Evren City RP")
 async def telefono(interaction: discord.Interaction):
-    # Defer immediato per prevenire il timeout di 3 secondi di Discord
     await interaction.response.defer(ephemeral=True)
     
     user_id = str(interaction.user.id)
     username_discord = interaction.user.name
 
+    # Inizializziamo le variabili per evitare NameError successivi
+    numero, email, batteria, apps = None, None, 100, []
+
     try:
-        conn = psycopg2.connect(DB_CON)
-        cur = conn.cursor()
+        # Usiamo il Context Manager (with) per bloccare i freeze del DB
+        with psycopg2.connect(DB_CON, connect_timeout=3) as conn:
+            with conn.cursor() as cur:
+                
+                # 1. Prova a cercare l'utente
+                cur.execute("SELECT numero_telefono, email_indirizzo, batteria, app_installate FROM telefono_sistema WHERE user_id = %s;", (user_id,))
+                res = cur.fetchone()
 
-        # 1. Prova a cercare l'utente nel database
-        cur.execute("SELECT numero_telefono, email_indirizzo, batteria, app_installate FROM telefono_sistema WHERE user_id = %s;", (user_id,))
-        res = cur.fetchone()
-
-        # 2. Se NON esiste (Primo avvio assoluto del telefono per questo utente)
-        if not res:
-            nuovo_numero = f"555-{random.randint(1000, 9999)}"
-            nuova_email = f"{username_discord.lower().replace(' ', '')}@evren.city"
-            apps_default = ['whatsapp', 'email', 'appstore']
-            
-            # Inserimento esplicito di TUTTI i campi per non lasciare nulla al caso
-            cur.execute("""
-                INSERT INTO telefono_sistema (user_id, numero_telefono, email_indirizzo, batteria, app_installate) 
-                VALUES (%s, %s, %s, 100, %s) 
-                ON CONFLICT (user_id) DO NOTHING;
-            """, (user_id, nuevo_numero, nuova_email, apps_default))
-            conn.commit()
-            
-            # Rileggiamo subito dal database dopo l'inserimento per sicurezza matematica
-            cur.execute("SELECT numero_telefono, email_indirizzo, batteria, app_installate FROM telefono_sistema WHERE user_id = %s;", (user_id,))
-            res = cur.fetchone()
-
-        # 3. Estrazione finale sicura dei dati
-        numero, email, batteria, apps = res
-        
-        cur.close()
-        conn.close()
+                # 2. Se NON esiste (Primo avvio)
+                if not res:
+                    nuovo_numero = f"555-{random.randint(1000, 9999)}"
+                    nuova_email = f"{username_discord.lower().replace(' ', '')}@evren.city"
+                    apps_default = ['whatsapp', 'email', 'appstore']
+                    
+                    cur.execute("""
+                        INSERT INTO telefono_sistema (user_id, numero_telefono, email_indirizzo, batteria, app_installate) 
+                        VALUES (%s, %s, %s, 100, %s) 
+                        ON CONFLICT (user_id) DO NOTHING;
+                    """, (user_id, nuovo_numero, nuova_email, apps_default))
+                    conn.commit()
+                    
+                    # Valorizziamo subito senza fare un'altra query pesante
+                    numero, email, batteria, apps = nuovo_numero, nuova_email, 100, apps_default
+                else:
+                    numero, email, batteria, apps = res
 
     except Exception as db_error:
-        print(f"❌ [ERRORE RENDER - SQL TELEFONO]: Fallimento query iniziale. Dettagli: {db_error}")
+        # Questo print ora DEVE uscire grazie al connect_timeout forzato a 3 secondi
+        print(f"❌ [BLOCCO DATABASE RILEVATO]: {db_error}")
         return await interaction.followup.send("❌ Errore critico di sincronizzazione con il database della SIM.", ephemeral=True)
 
-    # 4. Generazione della schermata grafica
+    # 4. Generazione della schermata grafica (Verifichiamo che i dati siano presenti)
+    if not numero:
+        return await interaction.followup.send("❌ Il database non ha risposto in tempo. Riprova tra pochi istanti.", ephemeral=True)
+
     try:
         embed = discord.Embed(
             title="📱 EVREN OS v14.2",
@@ -354,9 +355,8 @@ async def telefono(interaction: discord.Interaction):
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
         
     except Exception as gui_error:
-        print(f"❌ [ERRORE RENDER - INTERFACCIA TELEFONO]: Costruzione bottoni fallita. Dettagli: {gui_error}")
+        print(f"❌ [ERRORE GRAFICA]: {gui_error}")
         return await interaction.followup.send("❌ Errore grafico nel caricamento dello schermo.", ephemeral=True)
-
 
 # ==========================================
 # INTERFACCIA HOMESCREEN A GRIGLIA (2 COLONNE)
