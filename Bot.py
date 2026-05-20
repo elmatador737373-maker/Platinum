@@ -290,7 +290,7 @@ APP_STORE_DATA = {
     "settings": {"nome": "Impostazioni", "prezzo": 0, "emoji": "⚙️", "desc": "Configura il tuo Evren OS."}
 }
 
- DIZIONARIO_COLORI = {
+DIZIONARIO_COLORI = {
     "Grigio": discord.Color.from_rgb(47, 49, 54),
     "Blu": discord.Color.blue(),
     "Verde": discord.Color.green(),
