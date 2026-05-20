@@ -285,8 +285,8 @@ INFO_APP_GRIGLIA = {
 }
 
 APP_STORE_DATA = {
-    "instagram": {"nome": "Instagram", "prezzo": 500, "emoji": "📸", "desc": "Condividi foto e storie con la città."},
-    "tiktok": {"nome": "TikTok", "prezzo": 600, "emoji": "🎵", "desc": "Guarda e pubblica video brevi RP."},
+    "instagram": {"nome": "Instagram", "prezzo": 0, "emoji": "📸", "desc": "Condividi foto e storie con la città."},
+    "tiktok": {"nome": "TikTok", "prezzo": 0, "emoji": "🎵", "desc": "Guarda e pubblica video brevi RP."},
     "settings": {"nome": "Impostazioni", "prezzo": 0, "emoji": "⚙️", "desc": "Configura il tuo Evren OS."}
 }
 
