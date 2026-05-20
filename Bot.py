@@ -477,11 +477,14 @@ class BottoneIconaGriglia(discord.ui.Button):
             view.add_item(BottoneRitornoHome(user_id))
             await interaction.response.edit_message(embed=embed, view=view)
         elif self.app_id == "appstore":
-                embed = discord.Embed(title="🛍️ App Store", description="Sblocca ed installa nuove applicazioni commerciali.", color=discord.Color.orange())
-                view = discord.ui.View()
-                view.add_item(MenuSelezionaAppStore(user_id))
-            view.add_item(BottoneHome(user_id))
+            embed = discord.Embed(title="🛍️ App Store", description="Sblocca ed installa nuove applicazioni commerciali.", color=discord.Color.orange())
+            view = discord.ui.View()
+            view.add_item(MenuSelezionaAppStore(user_id))
+                
+                # SPOSTATE QUI DENTRO (Allineate con view.add_item sopra)
+            view.add_item(BottoneRitornoHome(user_id)) # Nota: controlla se si chiama BottoneRitornoHome o BottoneHome
             await interaction.response.edit_message(embed=embed, view=view)
+
 
 
 class BottoneAzioneTelefono(discord.ui.Button):
