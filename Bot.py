@@ -271,7 +271,6 @@ async def mostra_patente(interaction: discord.Interaction):
         embed.set_thumbnail(url=doc[3])
 
     await interaction.response.send_message(embed=embed)
-
 # ==========================================
 # CONFIGURAZIONE STRUTTURE DATI TELEFONO
 # ==========================================
@@ -294,50 +293,56 @@ APP_STORE_DATA = {
 # ==========================================
 @bot.tree.command(name="telefono", description="Apri lo smartphone virtuale di Evren City RP")
 async def telefono(interaction: discord.Interaction):
+    # Defer immediato per prevenire il timeout di 3 secondi di Discord
     await interaction.response.defer(ephemeral=True)
     
     user_id = str(interaction.user.id)
     username_discord = interaction.user.name
 
-    # Inizializziamo le variabili per evitare NameError successivi
+    # Inizializziamo le variabili di default
     numero, email, batteria, apps = None, None, 100, []
 
-    try:
-        # Usiamo il Context Manager (with) per bloccare i freeze del DB
-        with psycopg2.connect(DB_CON, connect_timeout=3) as conn:
-            with conn.cursor() as cur:
-                
-                # 1. Prova a cercare l'utente
-                cur.execute("SELECT numero_telefono, email_indirizzo, batteria, app_installate FROM telefono_sistema WHERE user_id = %s;", (user_id,))
-                res = cur.fetchone()
+    # Utilizziamo la tua funzione ufficiale di connessione per evitare i freeze
+    conn = get_db_connection()
+    if not conn:
+        print("🚨 [CRITICO TELEFONO]: Impossibile stabilire una connessione tramite get_db_connection()")
+        return await interaction.followup.send("❌ Errore critico: Il server della SIM non è raggiungibile in questo momento.", ephemeral=True)
 
-                # 2. Se NON esiste (Primo avvio)
-                if not res:
-                    nuovo_numero = f"555-{random.randint(1000, 9999)}"
-                    nuova_email = f"{username_discord.lower().replace(' ', '')}@evren.city"
-                    apps_default = ['whatsapp', 'email', 'appstore']
-                    
-                    cur.execute("""
-                        INSERT INTO telefono_sistema (user_id, numero_telefono, email_indirizzo, batteria, app_installate) 
-                        VALUES (%s, %s, %s, 100, %s) 
-                        ON CONFLICT (user_id) DO NOTHING;
-                    """, (user_id, nuovo_numero, nuova_email, apps_default))
-                    conn.commit()
-                    
-                    # Valorizziamo subito senza fare un'altra query pesante
-                    numero, email, batteria, apps = nuovo_numero, nuova_email, 100, apps_default
-                else:
-                    numero, email, batteria, apps = res
+    try:
+        cur = conn.cursor()
+
+        # 1. Cerca l'utente nel sistema telefonico (mantiene la mia struttura tabelle)
+        cur.execute("SELECT numero_telefono, email_indirizzo, batteria, app_installate FROM telefono_sistema WHERE user_id = %s;", (user_id,))
+        res = cur.fetchone()
+
+        # 2. Se NON esiste (Primo avvio assoluto del telefono)
+        if not res:
+            print(f"🆕 Generazione nuovo numero e SIM per {username_discord}...")
+            nuovo_numero = f"555-{random.randint(1000, 9999)}"
+            nuova_email = f"{username_discord.lower().replace(' ', '')}@evren.city"
+            apps_default = ['whatsapp', 'email', 'appstore']
+            
+            # Inserimento pulito con array nativo PostgreSQL
+            cur.execute("""
+                INSERT INTO telefono_sistema (user_id, numero_telefono, email_indirizzo, batteria, app_installate) 
+                VALUES (%s, %s, %s, 100, %s) 
+                ON CONFLICT (user_id) DO NOTHING;
+            """, (user_id, nuovo_numero, nuova_email, apps_default))
+            conn.commit()
+            
+            numero, email, batteria, apps = nuovo_numero, nuova_email, 100, apps_default
+        else:
+            numero, email, batteria, apps = res
 
     except Exception as db_error:
-        # Questo print ora DEVE uscire grazie al connect_timeout forzato a 3 secondi
-        print(f"❌ [BLOCCO DATABASE RILEVATO]: {db_error}")
-        return await interaction.followup.send("❌ Errore critico di sincronizzazione con il database della SIM.", ephemeral=True)
+        print(f"❌ [ERRORE SQL TELEFONO]: {db_error}")
+        return await interaction.followup.send(f"❌ Errore di sincronizzazione SIM. Dettagli: {str(db_error)[:50]}", ephemeral=True)
+    finally:
+        if conn:
+            cur.close()
+            conn.close()
 
-    # 4. Generazione della schermata grafica (Verifichiamo che i dati siano presenti)
-    if not numero:
-        return await interaction.followup.send("❌ Il database non ha risposto in tempo. Riprova tra pochi istanti.", ephemeral=True)
-
+    # 3. Generazione della schermata grafica
     try:
         embed = discord.Embed(
             title="📱 EVREN OS v14.2",
@@ -355,19 +360,19 @@ async def telefono(interaction: discord.Interaction):
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
         
     except Exception as gui_error:
-        print(f"❌ [ERRORE GRAFICA]: {gui_error}")
+        print(f"❌ [ERRORE INTERFACCIA TELEFONO]: {gui_error}")
         return await interaction.followup.send("❌ Errore grafico nel caricamento dello schermo.", ephemeral=True)
+
 
 # ==========================================
 # INTERFACCIA HOMESCREEN A GRIGLIA (2 COLONNE)
 # ==========================================
 class SchermataHomeGrigliaView(discord.ui.View):
-    # Risolto bug on_ready: aggiunti valori di default =None
+    # Risolto bug on_ready aggiungendo i parametri =None di default
     def __init__(self, user_id=None, apps=None):
         super().__init__(timeout=None)
         self.user_id = user_id
 
-        # Se chiamato da on_ready, interrompe l'esecuzione evitando cicli for su oggetti vuoti
         if apps is None:
             return
 
@@ -456,7 +461,7 @@ class BottoneAzioneTelefono(discord.ui.Button):
 
 
 # ==========================================
-# STRUTTURE MODAL
+# STRUTTURE MODAL (COMPRESO LOG INTERNO)
 # ==========================================
 class ModalAggiungiContatto(discord.ui.Modal, title="Rubrica - Salva Contatto"):
     nome = discord.ui.TextInput(label="Nome Contatto RP", placeholder="Es: Mario Rossi")
@@ -464,16 +469,16 @@ class ModalAggiungiContatto(discord.ui.Modal, title="Rubrica - Salva Contatto"):
 
     async def on_submit(self, interaction: discord.Interaction):
         user_id = str(interaction.user.id)
+        conn = get_db_connection()
+        if not conn:
+            return await interaction.response.send_message("❌ Errore di connessione al database della Rubrica.", ephemeral=True)
+            
         try:
-            conn = psycopg2.connect(DB_CON)
             cur = conn.cursor()
-
             cur.execute("SELECT user_id FROM telefono_sistema WHERE numero_telefono = %s;", (str(self.numero.value),))
             res = cur.fetchone()
 
             if not res:
-                cur.close()
-                conn.close()
                 return await interaction.response.send_message("❌ Questo numero non esiste sulla rete telefonica.", ephemeral=True)
 
             contatto_id = res[0]
@@ -482,12 +487,13 @@ class ModalAggiungiContatto(discord.ui.Modal, title="Rubrica - Salva Contatto"):
                 VALUES (%s, %s, %s) ON CONFLICT (user_id, contatto_id) DO UPDATE SET nome_salvato = EXCLUDED.nome_salvato;
             """, (user_id, contatto_id, str(self.nome.value)))
             conn.commit()
-            cur.close()
-            conn.close()
-
             await interaction.response.send_message(f"👤 Salva in rubrica: `{self.nome.value}`!", ephemeral=True)
         except Exception as e:
-            print(f"❌ [ERRORE RENDER - MODAL CONTATTI]: Errore durante il salvataggio in rubrica. Dettagli: {e}")
+            print(f"❌ [ERRORE RENDER - MODAL CONTATTI]: {e}")
+        finally:
+            if conn:
+                cur.close()
+                conn.close()
 
 
 class ModalApriChatWhatsApp(discord.ui.Modal, title="WhatsApp - Carica Chat"):
@@ -497,8 +503,11 @@ class ModalApriChatWhatsApp(discord.ui.Modal, title="WhatsApp - Carica Chat"):
         user_id = str(interaction.user.id)
         input_data = str(self.info_contatto.value)
 
+        conn = get_db_connection()
+        if not conn:
+            return await interaction.response.send_message("❌ Errore di connessione al database delle Chat.", ephemeral=True)
+
         try:
-            conn = psycopg2.connect(DB_CON)
             cur = conn.cursor()
 
             if "-" in input_data:
@@ -509,8 +518,6 @@ class ModalApriChatWhatsApp(discord.ui.Modal, title="WhatsApp - Carica Chat"):
                 target_id = input_data
 
             if not target_id:
-                cur.close()
-                conn.close()
                 return await interaction.response.send_message("❌ Utente non registrato sulla rete.", ephemeral=True)
 
             cur.execute("SELECT nome_salvato FROM telefono_contatti WHERE user_id = %s AND contatto_id = %s;", (user_id, target_id))
@@ -528,8 +535,6 @@ class ModalApriChatWhatsApp(discord.ui.Modal, title="WhatsApp - Carica Chat"):
             """, (user_id, target_id, target_id, user_id))
             
             messaggi = cur.fetchall()
-            cur.close()
-            conn.close()
 
             embed = discord.Embed(title=f"💬 Chat con: {nome_visualizzato}", color=discord.Color.green())
 
@@ -552,7 +557,11 @@ class ModalApriChatWhatsApp(discord.ui.Modal, title="WhatsApp - Carica Chat"):
             view.add_item(BottoneHome(user_id))
             await interaction.response.edit_message(embed=embed, view=view)
         except Exception as e:
-            print(f"❌ [ERRORE RENDER - MODAL WHATSAPP]: Errore caricamento o rendering storico chat. Dettagli: {e}")
+            print(f"❌ [ERRORE RENDER - MODAL WHATSAPP]: {e}")
+        finally:
+            if conn:
+                cur.close()
+                conn.close()
 
 
 class BottoneInviaMessaggioRapido(discord.ui.Button):
@@ -578,24 +587,28 @@ class ModalRispostaWhatsApp(discord.ui.Modal):
         mittente_id = str(interaction.user.id)
         testo = str(self.msg.value)
 
+        conn = get_db_connection()
+        if not conn:
+            return await interaction.followup.send("❌ Errore durante l'invio della chat.", ephemeral=True)
+
         try:
-            conn = psycopg2.connect(DB_CON)
             cur = conn.cursor()
             cur.execute("INSERT INTO telefono_chat (sender_id, receiver_id, messaggio, letto) VALUES (%s, %s, %s, FALSE);", (mittente_id, self.target_id, testo))
             conn.commit()
-            cur.close()
-            conn.close()
 
             try:
                 target_user = await interaction.client.fetch_user(int(self.target_id))
                 embed_dm = discord.Embed(title="💬 WhatsApp RP", description=f"**Nuovo messaggio da <@{mittente_id}>:**\n\n> {testo}", color=discord.Color.green())
                 await target_user.send(embed=embed_dm)
-            except Exception as dm_err:
-                print(f"⚠️ [AVVISO DM TELEFONO]: Impossibile inviare notifica privata all'utente {self.target_id}: {dm_err}")
-                
+            except:
+                pass
             await interaction.followup.send(f"✔️ Inviato a {self.nome_visualizzato}!", ephemeral=True)
         except Exception as e:
-            print(f"❌ [ERRORE RENDER - INVIO MESSAGGIO]: Fallito inserimento del testo nel db delle chat. Dettagli: {e}")
+            print(f"❌ [ERRORE RENDER - INVIO MESSAGGIO]: {e}")
+        finally:
+            if conn:
+                cur.close()
+                conn.close()
 
 
 class ModalEmail(discord.ui.Modal, title="Mail client - Invia Email"):
@@ -604,19 +617,21 @@ class ModalEmail(discord.ui.Modal, title="Mail client - Invia Email"):
     corpo = discord.ui.TextInput(label="Corpo", style=discord.TextStyle.paragraph)
 
     async def on_submit(self, interaction: discord.Interaction):
+        conn = get_db_connection()
+        if not conn:
+            return await interaction.response.send_message("❌ Database Mail non raggiungibile.", ephemeral=True)
         try:
-            # Salvataggio logico della mail nel database
-            conn = psycopg2.connect(DB_CON)
             cur = conn.cursor()
             cur.execute("INSERT INTO telefono_email (mittente_email, destinatario_email, oggetto, messaggio) VALUES (%s, %s, %s, %s);", 
                         (f"user_{interaction.user.id}@evren.city", str(self.dest_mail.value), str(self.oggetto.value), str(self.corpo.value)))
             conn.commit()
-            cur.close()
-            conn.close()
-            
             await interaction.response.send_message(f"📧 Mail inviata correttamente a `{self.dest_mail.value}`!", ephemeral=True)
         except Exception as e:
-            print(f"❌ [ERRORE RENDER - EMAIL]: Invio email fallito. Dettagli: {e}")
+            print(f"❌ [ERRORE RENDER - EMAIL]: {e}")
+        finally:
+            if conn:
+                cur.close()
+                conn.close()
 
 
 class ModalSocial(discord.ui.Modal, title="Condividi sui Social"):
@@ -636,7 +651,7 @@ class ModalSocial(discord.ui.Modal, title="Condividi sui Social"):
                 embed.set_image(url=self.media_url.value)
             await interaction.response.send_message(embed=embed)
         except Exception as e:
-            print(f"❌ [ERRORE RENDER - MODAL SOCIAL]: Pubblicazione embed social interrotta. Dettagli: {e}")
+            print(f"❌ [ERRORE RENDER - MODAL SOCIAL]: {e}")
 
 
 # ==========================================
@@ -656,36 +671,37 @@ class MenuSelezionaAppStore(discord.ui.Select):
         info = APP_STORE_DATA[app_scelta]
         costo = info["prezzo"]
 
-        try:
-            conn = psycopg2.connect(DB_CON)
-            cur = conn.cursor()
+        conn = get_db_connection()
+        if not conn:
+            return await interaction.response.send_message("❌ Database App Store offline.", ephemeral=True)
 
+        try:
+            cur = conn.cursor()
             cur.execute("SELECT app_installate FROM telefono_sistema WHERE user_id = %s;", (self.user_id,))
             apps = cur.fetchone()[0]
 
             if app_scelta in apps:
-                cur.close()
-                conn.close()
                 return await interaction.response.send_message(f"❌ {info['nome']} è già sul tuo smartphone.", ephemeral=True)
 
-            cur.execute("SELECT bank FROM users WHERE user_id = %s;", (self.user_id,))
+            # Sistema corretto adattato alla tua tabella users (dove la chiave si chiama 'id')
+            cur.execute("SELECT bank FROM users WHERE id = %s;", (self.user_id,))
             res_bank = cur.fetchone()
             saldo_banca = res_bank[0] if res_bank else 0
 
             if saldo_banca < costo:
-                cur.close()
-                conn.close()
                 return await interaction.response.send_message(f"❌ Fondi bancari insufficienti.", ephemeral=True)
 
-            cur.execute("UPDATE users SET bank = bank - %s WHERE user_id = %s;", (costo, self.user_id))
+            cur.execute("UPDATE users SET bank = bank - %s WHERE id = %s;", (costo, self.user_id))
             cur.execute("UPDATE telefono_sistema SET app_installate = array_append(app_installate, %s) WHERE user_id = %s;", (app_scelta, self.user_id))
             conn.commit()
-            cur.close()
-            conn.close()
 
             await interaction.response.send_message(f"📥 Installata: **{info['nome']}**!", ephemeral=True)
         except Exception as e:
-            print(f"❌ [ERRORE RENDER - APP STORE]: Transazione monetaria o download app fallito. Dettagli: {e}")
+            print(f"❌ [ERRORE RENDER - APP STORE]: {e}")
+        finally:
+            if conn:
+                cur.close()
+                conn.close()
 
 
 class BottoneHome(discord.ui.Button):
@@ -694,13 +710,14 @@ class BottoneHome(discord.ui.Button):
         self.user_id = user_id
 
     async def callback(self, interaction: discord.Interaction):
+        conn = get_db_connection()
+        if not conn:
+            return await interaction.response.send_message("❌ Sincronizzazione Home Fallita.", ephemeral=True)
+            
         try:
-            conn = psycopg2.connect(DB_CON)
             cur = conn.cursor()
             cur.execute("SELECT numero_telefono, email_indirizzo, batteria, app_installate FROM telefono_sistema WHERE user_id = %s;", (self.user_id,))
             numero, email, batteria, apps = cur.fetchone()
-            cur.close()
-            conn.close()
 
             embed = discord.Embed(
                 title="📱 EVREN OS v14.2",
@@ -716,7 +733,11 @@ class BottoneHome(discord.ui.Button):
 
             await interaction.response.edit_message(embed=embed, view=SchermataHomeGrigliaView(self.user_id, apps))
         except Exception as e:
-            print(f"❌ [ERRORE RENDER - BACK TO HOME]: Impossibile rientrare alla home del telefono. Dettagli: {e}")
+            print(f"❌ [ERRORE RENDER - BACK TO HOME]: {e}")
+        finally:
+            if conn:
+                cur.close()
+                conn.close()
 
 import discord
 from discord import app_commands
